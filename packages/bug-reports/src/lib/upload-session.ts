@@ -29,6 +29,7 @@ import {
   processBugReportIngestionJob,
   queueBugReportIngestionJob,
 } from "./ingestion-jobs"
+import { forwardBugReportToGitHub } from "./integrations"
 import { getStorageProvider } from "./storage"
 import {
   buildFallbackTitle,
@@ -395,6 +396,15 @@ export async function finalizeBugReportUpload(input: {
       message: "Failed to process debugger data for this report.",
     })
   }
+
+  // Fire-and-forget GitHub Issues forwarding. No-op unless the report's
+  // organization has a GitHub integration configured (Settings → Integrations
+  // → GitHub). Errors are logged inside the helper and never block the
+  // capture response — the .catch is only here to keep the unhandled-rejection
+  // linter happy; the helper swallows its own failures.
+  forwardBugReportToGitHub(uploadSession.id).catch(() => {
+    // intentional: errors are already reported inside the helper
+  })
 
   return {
     id: uploadSession.id,
