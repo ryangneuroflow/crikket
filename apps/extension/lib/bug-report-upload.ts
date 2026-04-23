@@ -26,6 +26,7 @@ export async function submitBugReportWithUploads(input: {
     durationMs?: number
     pageTitle?: string
   }
+  parentIssueRef?: string
   priority: Priority
   title?: string
   url?: string
@@ -38,6 +39,7 @@ export async function submitBugReportWithUploads(input: {
     hasDebuggerPayload: Boolean(input.debuggerPayload),
     debuggerSummary: input.debuggerSummary,
     metadata: input.metadata,
+    parentIssueRef: input.parentIssueRef,
     priority: input.priority,
     title: input.title,
     url: input.url,

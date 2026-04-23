@@ -17,6 +17,13 @@ const ATTACHMENTS_BRANCH = "crikket-attachments"
 // base64 overhead in the JSON request body and keeps issue load times sane.
 const MAX_ATTACHMENT_BYTES = 40 * 1024 * 1024
 
+// URL form: https://github.com/<owner>/<repo>/issues/<number>
+// Tolerate http/https, www, trailing slashes, and a `?...`/`#...` tail.
+const PARENT_ISSUE_URL_RE =
+  /^https?:\/\/(?:www\.)?github\.com\/([^/\s]+)\/([^/\s]+)\/issues\/(\d+)(?:[/?#].*)?$/i
+// Bare number or `#number` form.
+const PARENT_ISSUE_NUMBER_RE = /^#?(\d+)$/
+
 interface DeviceInfo {
   browser?: string
   os?: string
@@ -48,9 +55,64 @@ interface AttachmentResult {
 export interface CreatedGitHubIssue {
   htmlUrl: string
   number: number
+  /** GitHub's internal DB id of the created issue. Needed to attach it as a
+   * sub-issue of a parent — the /sub_issues endpoint wants the child's id,
+   * not its human-facing issue number. */
+  id: number
   /** Repo + token captured for the follow-up attachment phase. */
   repo: string
   token: string
+  /**
+   * Non-null when a parent issue ref was supplied AND the sub-issue link
+   * was established. Carries the resolved parent number so callers can
+   * persist it alongside the child issue URL.
+   */
+  parentIssueNumber: number | null
+}
+
+/**
+ * Parsed representation of the reporter-supplied parent-issue reference.
+ *
+ * We accept three input forms in the UI:
+ *   - `123`
+ *   - `#123`
+ *   - `https://github.com/<owner>/<repo>/issues/123`
+ *
+ * When a full URL is supplied we remember the `owner/repo` so the integration
+ * can verify it matches the org's configured target repo. A mismatch is a
+ * non-fatal error — we skip the sub-issue attach and fall back to creating
+ * a regular top-level issue so the capture still lands somewhere.
+ */
+export interface ParsedParentIssueRef {
+  number: number
+  /** Present only when the ref was a URL; null if the user typed just a number. */
+  repo: string | null
+}
+
+/**
+ * Turn the raw reporter input into a structured parent-issue reference.
+ * Returns null for empty/whitespace input. Throws for malformed, non-empty
+ * input so the caller can surface the problem instead of silently dropping
+ * the reporter's intent.
+ */
+export function parseParentIssueRef(raw: string): ParsedParentIssueRef | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+
+  const urlMatch = trimmed.match(PARENT_ISSUE_URL_RE)
+  if (urlMatch) {
+    const [, owner, repo, number] = urlMatch
+    return { number: Number(number), repo: `${owner}/${repo}` }
+  }
+
+  const numMatch = trimmed.match(PARENT_ISSUE_NUMBER_RE)
+  if (numMatch) {
+    return { number: Number(numMatch[1]), repo: null }
+  }
+
+  throw new Error(
+    `Parent issue must be a GitHub issue URL, #<number>, or <number> (got "${trimmed}")`
+  )
 }
 
 /**
@@ -71,7 +133,8 @@ export interface CreatedGitHubIssue {
  * All of these are treated as non-fatal — capture submission still succeeds.
  */
 export async function createGitHubIssue(
-  bugReportId: string
+  bugReportId: string,
+  options?: { parentIssueRef?: string | null }
 ): Promise<CreatedGitHubIssue | null> {
   try {
     const report = await loadReport(bugReportId)
@@ -86,6 +149,17 @@ export async function createGitHubIssue(
     const credentials = await loadCredentials(report.organizationId)
     if (!credentials) return null
     const { repo, token } = credentials
+
+    // Resolve the parent ref *before* creating the issue so a malformed ref
+    // or a mismatched repo fails loudly (via reportNonFatalError) rather than
+    // silently orphaning the new issue. We still create the issue either way
+    // — the reporter's capture is the primary artifact, the sub-issue link
+    // is a best-effort enhancement.
+    const parent = resolveParentIssue({
+      raw: options?.parentIssueRef,
+      configuredRepo: repo,
+      bugReportId,
+    })
 
     const body = renderIssueBody({ report, attachments: [] })
     const title = renderIssueTitle(report)
@@ -113,10 +187,15 @@ export async function createGitHubIssue(
     const issue = (await response.json()) as {
       html_url?: string
       number?: number
+      id?: number
     }
-    if (!issue.html_url || typeof issue.number !== "number") {
+    if (
+      !issue.html_url ||
+      typeof issue.number !== "number" ||
+      typeof issue.id !== "number"
+    ) {
       reportNonFatalError(
-        `[github-integration] GitHub issue response for ${bugReportId} missing html_url/number`,
+        `[github-integration] GitHub issue response for ${bugReportId} missing html_url/number/id`,
         new Error("malformed_response")
       )
       return null
@@ -124,7 +203,29 @@ export async function createGitHubIssue(
     console.info(
       `[github-integration] Created GitHub issue #${issue.number} for bug report ${bugReportId}: ${issue.html_url}`
     )
-    return { htmlUrl: issue.html_url, number: issue.number, repo, token }
+
+    let parentIssueNumber: number | null = null
+    if (parent) {
+      const attached = await attachAsSubIssue({
+        repo,
+        token,
+        parentNumber: parent.number,
+        childIssueId: issue.id,
+        bugReportId,
+      })
+      if (attached) {
+        parentIssueNumber = parent.number
+      }
+    }
+
+    return {
+      htmlUrl: issue.html_url,
+      number: issue.number,
+      id: issue.id,
+      repo,
+      token,
+      parentIssueNumber,
+    }
   } catch (error) {
     reportNonFatalError(
       `[github-integration] Unexpected failure creating GitHub issue for ${bugReportId}`,
@@ -132,6 +233,90 @@ export async function createGitHubIssue(
     )
     return null
   }
+}
+
+/**
+ * Attach a just-created issue as a sub-issue of the given parent via
+ * GitHub's Sub-issues REST endpoint. Returns true on success, false on any
+ * failure (all failures are non-fatal — the child issue already exists).
+ */
+async function attachAsSubIssue(input: {
+  repo: string
+  token: string
+  parentNumber: number
+  childIssueId: number
+  bugReportId: string
+}): Promise<boolean> {
+  const { repo, token, parentNumber, childIssueId, bugReportId } = input
+  try {
+    const response = await ghFetch(
+      `https://api.github.com/repos/${repo}/issues/${parentNumber}/sub_issues`,
+      {
+        token,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sub_issue_id: childIssueId }),
+      }
+    )
+    if (!response.ok) {
+      const text = await safeReadText(response)
+      reportNonFatalError(
+        `[github-integration] Failed to attach sub-issue to #${parentNumber} for ${bugReportId} (status ${response.status})`,
+        new Error(text || response.statusText)
+      )
+      return false
+    }
+    console.info(
+      `[github-integration] Linked bug report ${bugReportId} as sub-issue of #${parentNumber} on ${repo}`
+    )
+    return true
+  } catch (error) {
+    reportNonFatalError(
+      `[github-integration] Unexpected failure attaching sub-issue to #${parentNumber} for ${bugReportId}`,
+      error
+    )
+    return false
+  }
+}
+
+/**
+ * Parse the reporter-supplied parent ref and verify it targets the configured
+ * repo. Returns null when the reporter didn't supply one, when the ref is
+ * malformed, or when the URL points at a different repo than the integration
+ * — each case is reported as non-fatal and the caller falls back to creating
+ * a top-level issue.
+ */
+function resolveParentIssue(input: {
+  raw: string | null | undefined
+  configuredRepo: string
+  bugReportId: string
+}): ParsedParentIssueRef | null {
+  const { raw, configuredRepo, bugReportId } = input
+  if (!raw) return null
+
+  let parsed: ParsedParentIssueRef | null
+  try {
+    parsed = parseParentIssueRef(raw)
+  } catch (error) {
+    reportNonFatalError(
+      `[github-integration] Ignoring malformed parent-issue ref for ${bugReportId}`,
+      error
+    )
+    return null
+  }
+  if (!parsed) return null
+
+  if (
+    parsed.repo &&
+    parsed.repo.toLowerCase() !== configuredRepo.toLowerCase()
+  ) {
+    reportNonFatalError(
+      `[github-integration] Parent issue repo "${parsed.repo}" does not match integration repo "${configuredRepo}" for ${bugReportId} — skipping sub-issue link`,
+      new Error("parent_repo_mismatch")
+    )
+    return null
+  }
+  return parsed
 }
 
 /**
@@ -191,9 +376,10 @@ export async function attachAndUpdateGitHubIssue(input: {
  * issue URL is available synchronously.
  */
 export async function forwardBugReportToGitHub(
-  bugReportId: string
+  bugReportId: string,
+  options?: { parentIssueRef?: string | null }
 ): Promise<void> {
-  const created = await createGitHubIssue(bugReportId)
+  const created = await createGitHubIssue(bugReportId, options)
   if (!created) return
   await attachAndUpdateGitHubIssue({
     bugReportId,

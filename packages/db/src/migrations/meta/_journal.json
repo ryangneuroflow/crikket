@@ -22,6 +22,13 @@
       "when": 1776975284247,
       "tag": "0002_add_bug_report_github_issue_url",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1777000000000,
+      "tag": "0003_add_parent_issue_ref_and_github_parent_issue_number",
+      "breakpoints": true
     }
   ]
 }

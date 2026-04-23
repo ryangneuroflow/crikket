@@ -19,6 +19,7 @@ export function submitCapturedReport(input: {
 }): Promise<CaptureSubmitResult> {
   const submitTransport = input.submitTransport ?? defaultSubmitTransport
 
+  const trimmedParentRef = input.draft.parentIssueRef?.trim() ?? ""
   return submitTransport({
     config: input.config,
     report: {
@@ -34,6 +35,7 @@ export function submitCapturedReport(input: {
       debuggerPayload: input.review.debuggerPayload,
       debuggerSummary: input.review.debuggerSummary,
       media: input.media.blob,
+      parentIssueRef: trimmedParentRef === "" ? undefined : trimmedParentRef,
     },
   })
 }

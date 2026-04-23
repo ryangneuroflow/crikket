@@ -285,6 +285,7 @@ function App() {
     title: string
     description: string
     priority: Priority
+    parentIssueRef: string
   }) => {
     const blob = captureType === "video" ? recordedBlob : screenshotBlob
     if (!blob || blob.size === 0) {
@@ -319,6 +320,7 @@ function App() {
         title: normalizeOptionalText(values.title, 200),
         priority: values.priority,
         description: normalizeOptionalText(values.description, 3000),
+        parentIssueRef: normalizeOptionalText(values.parentIssueRef, 500),
         url: captureContextSubmissionData.normalizedUrl,
         metadata: {
           duration: formatDuration(durationMs),

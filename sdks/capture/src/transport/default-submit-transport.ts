@@ -118,6 +118,7 @@ function buildUploadSessionRequest(request: CaptureSubmitRequest): {
     pageTitle: string
     submittedVia: string
   }
+  parentIssueRef?: string
   priority: CaptureSubmitRequest["report"]["priority"]
   title: string
   url: string
@@ -143,6 +144,7 @@ function buildUploadSessionRequest(request: CaptureSubmitRequest): {
     captureContentType: request.report.media.type || undefined,
     debuggerSummary: request.report.debuggerSummary,
     hasDebuggerPayload: Boolean(request.report.debuggerPayload),
+    parentIssueRef: request.report.parentIssueRef,
   }
 }
 

@@ -48,7 +48,8 @@ const state: {
   branchCreateStatus: number
   existingFileSha: string | undefined
   issueStatus: number
-  issueResponse: { number?: number; html_url?: string }
+  issueResponse: { number?: number; html_url?: string; id?: number }
+  subIssueStatus: number
   nonFatalErrors: Array<{ message: string; error: unknown }>
 } = {
   report: null,
@@ -62,7 +63,9 @@ const state: {
   issueResponse: {
     number: 42,
     html_url: "https://github.com/test/repo/issues/42",
+    id: 10_042,
   },
+  subIssueStatus: 201,
   nonFatalErrors: [],
 }
 
@@ -191,6 +194,10 @@ globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
   if (method === "PUT" && u.includes("/contents/")) {
     return jsonResponse(200, {})
   }
+  // Sub-issue attach: /repos/<repo>/issues/<parent>/sub_issues
+  if (method === "POST" && u.endsWith("/sub_issues")) {
+    return jsonResponse(state.subIssueStatus, {})
+  }
   // Create issue
   if (method === "POST" && u.includes("/issues")) {
     return jsonResponse(state.issueStatus, state.issueResponse)
@@ -296,7 +303,9 @@ function resetState(): void {
   state.issueResponse = {
     number: 42,
     html_url: "https://github.com/test/repo/issues/42",
+    id: 10_042,
   }
+  state.subIssueStatus = 201
   state.nonFatalErrors = []
   fetchCalls.length = 0
 }
@@ -318,6 +327,12 @@ function lastIssuePatch(): RecordedCall | undefined {
   return [...fetchCalls]
     .reverse()
     .find((c) => c.method === "PATCH" && ISSUE_PATCH_URL_RE.test(c.url))
+}
+
+function lastSubIssuePost(): RecordedCall | undefined {
+  return [...fetchCalls]
+    .reverse()
+    .find((c) => c.method === "POST" && c.url.endsWith("/sub_issues"))
 }
 
 beforeEach(() => {
@@ -576,7 +591,11 @@ describe("forwardBugReportToGitHub: issue creation failure", () => {
     state.credentials = { repo: "owner/repo", token: "ghp_x" }
     state.branchExists = true
     state.issueStatus = 500
-    state.issueResponse = { number: undefined, html_url: undefined }
+    state.issueResponse = {
+      number: undefined,
+      html_url: undefined,
+      id: undefined,
+    }
 
     await forwardBugReportToGitHub(state.report!.id)
 
@@ -640,5 +659,121 @@ describe("createGitHubIssue / attachAndUpdateGitHubIssue split", () => {
     expect(patchedBody).toContain("## Artifacts")
     expect(patchedBody).toContain("/blob/crikket-attachments/")
     expect(lastIssuePatch()!.url).toMatch(ISSUE_42_PATCH_URL_RE)
+  })
+})
+
+const SUB_ISSUES_URL_RE = /\/issues\/\d+\/sub_issues$/
+const REPO_MISMATCH_RE = /does not match integration repo/
+const MALFORMED_PARENT_REF_RE = /malformed parent-issue ref/
+const SUBISSUE_ATTACH_FAILED_RE = /Failed to attach sub-issue/
+
+describe("createGitHubIssue: sub-issue linking", () => {
+  beforeEach(() => {
+    state.report = makeReport({ captureKey: null, debuggerKey: null })
+    state.credentials = { repo: "owner/repo", token: "ghp_x" }
+  })
+
+  it("does not call /sub_issues when no parent ref is supplied", async () => {
+    const created = await createGitHubIssue(state.report!.id)
+
+    expect(created).not.toBeNull()
+    expect(created!.parentIssueNumber).toBeNull()
+    expect(lastSubIssuePost()).toBeUndefined()
+  })
+
+  it("attaches the new issue as a sub-issue when a bare number is supplied", async () => {
+    const created = await createGitHubIssue(state.report!.id, {
+      parentIssueRef: "17",
+    })
+
+    expect(created).not.toBeNull()
+    expect(created!.parentIssueNumber).toBe(17)
+
+    const sub = lastSubIssuePost()
+    expect(sub).toBeDefined()
+    expect(sub!.url).toMatch(SUB_ISSUES_URL_RE)
+    expect(sub!.url).toContain("/repos/owner/repo/issues/17/sub_issues")
+    // POST body carries the *child* issue's database id (10042), not its
+    // human-facing number (42). GitHub's sub-issues endpoint requires the id.
+    expect(sub!.body).toEqual({ sub_issue_id: 10_042 })
+  })
+
+  it("accepts the `#123` form", async () => {
+    const created = await createGitHubIssue(state.report!.id, {
+      parentIssueRef: "#99",
+    })
+
+    expect(created!.parentIssueNumber).toBe(99)
+    expect(lastSubIssuePost()!.url).toContain(
+      "/repos/owner/repo/issues/99/sub_issues"
+    )
+  })
+
+  it("accepts a full issue URL when the owner/repo matches the integration", async () => {
+    const created = await createGitHubIssue(state.report!.id, {
+      parentIssueRef: "https://github.com/owner/repo/issues/101",
+    })
+
+    expect(created!.parentIssueNumber).toBe(101)
+    expect(lastSubIssuePost()!.url).toContain(
+      "/repos/owner/repo/issues/101/sub_issues"
+    )
+  })
+
+  it("skips the sub-issue attach when the URL points at a different repo", async () => {
+    const created = await createGitHubIssue(state.report!.id, {
+      parentIssueRef: "https://github.com/other/elsewhere/issues/1",
+    })
+
+    // The top-level issue is still created — capture must not be lost.
+    expect(created).not.toBeNull()
+    expect(created!.parentIssueNumber).toBeNull()
+    expect(lastSubIssuePost()).toBeUndefined()
+    expect(
+      state.nonFatalErrors.some((e) => REPO_MISMATCH_RE.test(e.message))
+    ).toBeTrue()
+  })
+
+  it("skips the sub-issue attach when the ref is malformed", async () => {
+    const created = await createGitHubIssue(state.report!.id, {
+      parentIssueRef: "not a valid reference",
+    })
+
+    expect(created).not.toBeNull()
+    expect(created!.parentIssueNumber).toBeNull()
+    expect(lastSubIssuePost()).toBeUndefined()
+    expect(
+      state.nonFatalErrors.some((e) => MALFORMED_PARENT_REF_RE.test(e.message))
+    ).toBeTrue()
+  })
+
+  it("still returns the created issue when the sub-issue POST fails", async () => {
+    state.subIssueStatus = 422
+
+    const created = await createGitHubIssue(state.report!.id, {
+      parentIssueRef: "17",
+    })
+
+    // Top-level issue exists, but the parent link wasn't established.
+    expect(created).not.toBeNull()
+    expect(created!.htmlUrl).toBe("https://github.com/test/repo/issues/42")
+    expect(created!.parentIssueNumber).toBeNull()
+    expect(
+      state.nonFatalErrors.some((e) =>
+        SUBISSUE_ATTACH_FAILED_RE.test(e.message)
+      )
+    ).toBeTrue()
+  })
+
+  it("ignores an empty-string parent ref (treats as not supplied)", async () => {
+    const created = await createGitHubIssue(state.report!.id, {
+      parentIssueRef: "   ",
+    })
+
+    expect(created!.parentIssueNumber).toBeNull()
+    expect(lastSubIssuePost()).toBeUndefined()
+    // No error reported — empty input is the default for reporters who don't
+    // want a parent link.
+    expect(state.nonFatalErrors.length).toBe(0)
   })
 })

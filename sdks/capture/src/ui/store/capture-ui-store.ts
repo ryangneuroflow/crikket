@@ -55,6 +55,7 @@ export function createCaptureUiStore(): CaptureUiStore {
         description: "",
         priority: DEFAULT_PRIORITY,
         visibility: BUG_REPORT_VISIBILITY_OPTIONS.private,
+        parentIssueRef: "",
       },
       reviewFormKey: input.media.objectUrl,
     })
