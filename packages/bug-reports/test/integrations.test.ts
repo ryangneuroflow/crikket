@@ -33,9 +33,16 @@ type Report = {
     url: string
     status: number | null
     duration: number | null
+    responseBody: string | null
     timestamp: Date
   }>
-  actions: Array<{ type: string; target: string | null; timestamp: Date }>
+  actions: Array<{
+    type: string
+    target: string | null
+    offset: number | null
+    metadata: unknown
+    timestamp: Date
+  }>
 }
 
 const state: {
@@ -272,6 +279,7 @@ function makeReport(overrides: Partial<Report> = {}): Report {
         url: "https://api.example.com/v1/settings",
         status: 500,
         duration: 423,
+        responseBody: '{"detail":"Internal server error"}',
         timestamp: new Date("2026-04-22T16:00:03Z"),
       },
     ],
@@ -279,12 +287,27 @@ function makeReport(overrides: Partial<Report> = {}): Report {
       {
         type: "click",
         target: "button#save",
+        offset: 1500,
+        metadata: null,
         timestamp: new Date("2026-04-22T16:00:00Z"),
       },
       {
         type: "input",
         target: "input#email",
+        offset: 2100,
+        metadata: null,
         timestamp: new Date("2026-04-22T16:00:00.500Z"),
+      },
+      {
+        type: "navigation",
+        target: "window",
+        offset: 2500,
+        metadata: {
+          mode: "pushState",
+          url: "http://localhost:5173/auth/register",
+          path: "/auth/register",
+        },
+        timestamp: new Date("2026-04-22T16:00:01Z"),
       },
     ],
     ...overrides,
@@ -463,7 +486,66 @@ describe("forwardBugReportToGitHub: issue body rendering", () => {
     expect(bodyText).toContain("ERROR: Uncaught TypeError")
 
     expect(bodyText).toContain("<summary>Network requests</summary>")
-    expect(bodyText).toContain("| POST | 500 | 423ms |")
+    // Network table now has a Response column and shows the 500 payload.
+    expect(bodyText).toContain(
+      "| POST | 500 | 423ms | https://api.example.com/v1/settings |"
+    )
+  })
+
+  it("renders navigation actions with path + mode from metadata", async () => {
+    await forwardBugReportToGitHub(state.report!.id)
+    const bodyText = (lastIssuePost()!.body as { body: string }).body
+
+    // `window` is the stored target; the renderer should prefer the path +
+    // pushState from metadata so the step actually says what happened.
+    expect(bodyText).toContain(
+      "3. **navigation** — `/auth/register` _(pushState)_"
+    )
+    expect(bodyText).not.toContain("3. **navigation** — `window`")
+  })
+
+  it("annotates each reproduction step with its offset from recording start", async () => {
+    await forwardBugReportToGitHub(state.report!.id)
+    const bodyText = (lastIssuePost()!.body as { body: string }).body
+
+    // 1500ms → +1.5s, 2100ms → +2.1s, 2500ms → +2.5s.
+    expect(bodyText).toContain("1. **click** — `button#save` _(+1.5s)_")
+    expect(bodyText).toContain("_(+2.1s)_")
+    expect(bodyText).toContain("_(+2.5s)_")
+  })
+
+  it("surfaces the response body in the network table only for error responses", async () => {
+    state.report = makeReport({
+      networkRequests: [
+        {
+          method: "GET",
+          url: "https://api.example.com/v1/ok",
+          status: 200,
+          duration: 10,
+          responseBody: '{"data":{"secret":"should not appear"}}',
+          timestamp: new Date(),
+        },
+        {
+          method: "GET",
+          url: "https://api.example.com/v1/fail",
+          status: 500,
+          duration: 280,
+          responseBody: '{"detail":"Internal server error"}',
+          timestamp: new Date(),
+        },
+      ],
+    })
+
+    await forwardBugReportToGitHub(state.report.id)
+    const bodyText = (lastIssuePost()!.body as { body: string }).body
+
+    expect(bodyText).toContain(
+      "| Method | Status | Duration | URL | Response |"
+    )
+    // 200 rows render `—` (no noise).
+    expect(bodyText).not.toContain("should not appear")
+    // 5xx rows include the body snippet.
+    expect(bodyText).toContain('`{"detail":"Internal server error"}`')
   })
 
   it("omits the priority label when priority is 'none'", async () => {

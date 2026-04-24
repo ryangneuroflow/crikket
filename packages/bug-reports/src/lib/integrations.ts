@@ -697,11 +697,14 @@ interface ReportWithRelations {
     url: string
     status: number | null
     duration: number | null
+    responseBody: string | null
     timestamp: Date
   }>
   actions: Array<{
     type: string
     target: string | null
+    offset: number | null
+    metadata: unknown
     timestamp: Date
   }>
 }
@@ -831,33 +834,94 @@ function renderNetworkTable(
     url: string
     status: number | null
     duration: number | null
+    responseBody: string | null
   }>
 ): string {
   const lines = [
-    "| Method | Status | Duration | URL |",
-    "| --- | --- | --- | --- |",
+    "| Method | Status | Duration | URL | Response |",
+    "| --- | --- | --- | --- | --- |",
   ]
   for (const row of rows) {
     lines.push(
       `| ${row.method} | ${row.status ?? "—"} | ${
         row.duration != null ? `${row.duration}ms` : "—"
-      } | ${escapeCell(truncate(row.url))} |`
+      } | ${escapeCell(truncate(row.url))} | ${renderResponseSnippet(row.status, row.responseBody)} |`
     )
   }
   return lines.join("\n")
 }
 
+// Only surface the response body for error responses; a 200 payload adds
+// noise without helping reproduce the bug. The snippet is truncated and
+// whitespace-collapsed to fit in a single table cell.
+function renderResponseSnippet(
+  status: number | null,
+  body: string | null
+): string {
+  if (status == null || status < 400) return "—"
+  if (!body) return "—"
+  const collapsed = body.replace(/\s+/g, " ").trim()
+  if (collapsed.length === 0) return "—"
+  return `\`${escapeCell(truncate(collapsed, 200))}\``
+}
+
 function renderActionList(
-  actions: Array<{ type: string; target: string | null }>
+  actions: Array<{
+    type: string
+    target: string | null
+    offset: number | null
+    metadata: unknown
+  }>
 ): string {
   return actions
     .map((action, idx) => {
-      const target = action.target
-        ? ` — \`${truncate(action.target, 120)}\``
-        : ""
-      return `${idx + 1}. **${action.type}**${target}`
+      const description = describeAction(action)
+      const offsetSuffix =
+        action.offset != null ? ` _(${formatOffset(action.offset)})_` : ""
+      const separator = description ? " — " : ""
+      return `${idx + 1}. **${action.type}**${separator}${description}${offsetSuffix}`
     })
     .join("\n")
+}
+
+// Prefer navigation metadata (path + mode) over the generic "window" target
+// the SDK emits for navigations — `/auth/register (pushState)` tells you
+// what actually happened; `window` does not.
+function describeAction(action: {
+  type: string
+  target: string | null
+  metadata: unknown
+}): string {
+  if (action.type === "navigation" && isRecord(action.metadata)) {
+    const meta = action.metadata
+    const path = typeof meta.path === "string" ? meta.path : undefined
+    const url = typeof meta.url === "string" ? meta.url : undefined
+    const mode = typeof meta.mode === "string" ? meta.mode : undefined
+    const primary = path && path.length > 0 ? path : url
+    if (primary) {
+      const modeSuffix = mode ? ` _(${mode})_` : ""
+      return `\`${truncate(primary, 120)}\`${modeSuffix}`
+    }
+  }
+  if (action.target) {
+    return `\`${truncate(action.target, 120)}\``
+  }
+  return ""
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+// Offsets are milliseconds from the start of the recording. Render as ms
+// under 1s and as seconds (1 decimal under 10s, integer above) otherwise —
+// the goal is a glanceable `+2.1s` that lets a reader correlate steps with
+// console logs and network rows without doing arithmetic on timestamps.
+function formatOffset(offsetMs: number): string {
+  if (!Number.isFinite(offsetMs) || offsetMs < 0) return ""
+  if (offsetMs < 1000) return `+${Math.round(offsetMs)}ms`
+  const secs = offsetMs / 1000
+  return `+${secs >= 10 ? secs.toFixed(0) : secs.toFixed(1)}s`
 }
 
 function buildLabels(priority: string): string[] {

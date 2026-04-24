@@ -71,6 +71,13 @@ services:
     environment:
       MINIO_ROOT_USER: crikket
       MINIO_ROOT_PASSWORD: crikketminio
+      # Crikket's capture SDK PUTs bug-report artifacts directly to MinIO via
+      # presigned URLs from whatever origin the host app runs at (Vite on
+      # :5173, the Crikket dashboard on :3001, etc). The preflight fails
+      # without an explicit allowlist, producing "Direct upload to storage
+      # failed. Check storage CORS or network access, then retry." in the
+      # capture widget. `*` matches the dev-only posture of this stack.
+      MINIO_API_CORS_ALLOW_ORIGIN: "*"
     ports:
       - "9000:9000"
       - "9001:9001"

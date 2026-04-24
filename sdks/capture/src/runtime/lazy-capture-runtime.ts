@@ -1,3 +1,4 @@
+import { DebuggerCollector } from "../debugger/debugger-collector"
 import type {
   CaptureInitOptions,
   CaptureRuntimeConfig,
@@ -25,6 +26,13 @@ export class LazyCaptureSdkRuntime implements CaptureRuntimeController {
   private mountedLauncher: MountedCaptureLauncher | null = null
   private eagerRuntime: CaptureSdkRuntime | null = null
   private eagerRuntimePromise: Promise<CaptureSdkRuntime> | null = null
+  // The collector is installed here at SDK bootstrap — *not* lazily on first
+  // capture — so its ring buffer accumulates console/network/action events
+  // from page load forward. That way a screenshot taken after an error can
+  // reach back via SCREENSHOT_LOOKBACK_MS and include the events that
+  // actually caused the bug, instead of a buffer that only started filling
+  // when the user opened the widget.
+  private debuggerCollector: DebuggerCollector | null = null
   private lifecycleVersion = 0
 
   init(options: CaptureInitOptions): CaptureRuntimeController {
@@ -44,6 +52,11 @@ export class LazyCaptureSdkRuntime implements CaptureRuntimeController {
       submitPath: runtimeConfig.submitPath,
       zIndex: runtimeConfig.zIndex,
       submitTransport: this.submitTransport,
+    }
+
+    if (!this.debuggerCollector) {
+      this.debuggerCollector = new DebuggerCollector()
+      this.debuggerCollector.install()
     }
 
     if (options.autoMount ?? true) {
@@ -111,6 +124,8 @@ export class LazyCaptureSdkRuntime implements CaptureRuntimeController {
     this.eagerRuntimePromise = null
     this.eagerRuntime?.destroy()
     this.eagerRuntime = null
+    this.debuggerCollector?.dispose()
+    this.debuggerCollector = null
     this.runtimeConfig = null
     this.initOptions = null
     this.submitTransport = undefined
@@ -172,13 +187,16 @@ export class LazyCaptureSdkRuntime implements CaptureRuntimeController {
     const lifecycleVersion = this.lifecycleVersion
     this.mountedLauncher?.setLoading(true)
 
+    const collector = this.debuggerCollector
     const runtimePromise = this.loadEagerRuntimeModule()
       .then(({ CaptureSdkRuntime }) => {
         if (lifecycleVersion !== this.lifecycleVersion) {
           throw new Error("Capture SDK runtime load was cancelled.")
         }
 
-        const runtime = new CaptureSdkRuntime()
+        // Hand our eagerly-installed collector to the inner runtime so it
+        // reuses the ring buffer that has been filling since SDK bootstrap.
+        const runtime = new CaptureSdkRuntime(collector ?? undefined)
         runtime.init({
           ...initOptions,
           autoMount: true,

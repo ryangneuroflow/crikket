@@ -22,6 +22,11 @@ describe("capture SDK screenshot flow", () => {
       submitTransport: createSubmitTransport(),
     })
 
+    // Eager install at bootstrap: the ring buffer starts filling from page
+    // load, not from first widget open, so the 60s lookback below actually
+    // has events to reach back into.
+    expect(sdkTestState.installCalls).toBe(1)
+    expect(sdkTestState.disposeCalls).toBe(0)
     expect(capture.isInitialized()).toBe(true)
     expect(capture.getConfig()).toEqual({
       host: "https://api.crikket.io",
@@ -101,6 +106,9 @@ describe("capture SDK screenshot flow", () => {
     capture.destroy()
     expect(sdkTestState.objectUrlsRevoked).toEqual(["blob:mock-1"])
     expect(sdkTestState.uiUnmounts).toBe(1)
+    // Collector is owned by the outer runtime and should only dispose on
+    // destroy — not on widget unmount.
+    expect(sdkTestState.disposeCalls).toBe(1)
     expect(capture.isInitialized()).toBe(false)
   })
 })
