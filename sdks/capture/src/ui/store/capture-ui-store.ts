@@ -48,12 +48,14 @@ export function createCaptureUiStore(): CaptureUiStore {
       warnings: [...input.warnings],
       summary: input.summary,
       shareUrl: "",
+      githubIssueUrl: "",
       copyLabel: "Copy Link",
       reviewDraft: {
         title: "",
         description: "",
         priority: DEFAULT_PRIORITY,
         visibility: BUG_REPORT_VISIBILITY_OPTIONS.private,
+        parentIssueRef: "",
       },
       reviewFormKey: input.media.objectUrl,
     })
@@ -98,7 +100,7 @@ export function createCaptureUiStore(): CaptureUiStore {
       })
     },
     showReview,
-    showSuccess: (shareUrl) => {
+    showSuccess: (input) => {
       patchState({
         overlayOpen: true,
         recordingDockOpen: false,
@@ -106,7 +108,8 @@ export function createCaptureUiStore(): CaptureUiStore {
         view: "success",
         errorMessage: null,
         busy: false,
-        shareUrl: shareUrl ?? "",
+        shareUrl: input.shareUrl ?? "",
+        githubIssueUrl: input.githubIssueUrl ?? "",
         copyLabel: "Copy Link",
       })
     },
@@ -146,6 +149,7 @@ function createInitialState(): CaptureUiState {
     summary: { ...DEFAULT_SUMMARY },
     media: null,
     shareUrl: "",
+    githubIssueUrl: "",
     copyLabel: "Copy Link",
     reviewDraft: {
       title: "",

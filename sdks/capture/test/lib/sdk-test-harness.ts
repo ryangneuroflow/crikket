@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, mock } from "bun:test"
 import { fileURLToPath } from "node:url"
 
+import { SCREENSHOT_LOOKBACK_MS, VIDEO_LOOKBACK_MS } from "../../src/constants"
 import type {
   CaptureSubmitRequest,
   CaptureSubmitResult,
@@ -69,6 +70,7 @@ export const sdkTestState = {
   markRecordingStartedCalls: [] as number[],
   finalizeSessionCalls: 0,
   clearSessionCalls: 0,
+  installCalls: 0,
   disposeCalls: 0,
   screenshotBlob: new Blob(["screenshot"], { type: "image/png" }),
   recordingBlob: new Blob(["recording"], { type: "video/webm" }),
@@ -130,8 +132,11 @@ mock.module(MOUNT_CAPTURE_UI_PATH, () => ({
         showReview: (input: ReviewInput) => {
           sdkTestState.uiShowReviewInputs.push(input)
         },
-        showSuccess: (shareUrl?: string) => {
-          sdkTestState.uiShowSuccessUrls.push(shareUrl)
+        showSuccess: (input: {
+          shareUrl?: string
+          githubIssueUrl?: string
+        }) => {
+          sdkTestState.uiShowSuccessUrls.push(input.shareUrl)
         },
         showError: () => undefined,
         setTitleIfEmpty: (value: string) => {
@@ -185,7 +190,15 @@ mock.module(CAPTURE_MEDIA_PATH, () => ({
 mock.module(DEBUGGER_COLLECTOR_PATH, () => ({
   DebuggerCollector: class DebuggerCollector {
     install(): void {
-      // Install work is irrelevant in the flow regression tests.
+      sdkTestState.installCalls += 1
+    }
+
+    startScreenshotSession(): void {
+      this.startSession("screenshot", SCREENSHOT_LOOKBACK_MS)
+    }
+
+    startRecordingSession(): void {
+      this.startSession("video", VIDEO_LOOKBACK_MS)
     }
 
     startSession(
@@ -271,6 +284,7 @@ export function resetSdkTestState(): void {
   sdkTestState.markRecordingStartedCalls = []
   sdkTestState.finalizeSessionCalls = 0
   sdkTestState.clearSessionCalls = 0
+  sdkTestState.installCalls = 0
   sdkTestState.disposeCalls = 0
   sdkTestState.screenshotBlob = new Blob(["screenshot"], { type: "image/png" })
   sdkTestState.recordingBlob = new Blob(["recording"], { type: "video/webm" })

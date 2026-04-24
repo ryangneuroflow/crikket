@@ -190,6 +190,36 @@ export function ReviewFormSection({
                 <FieldError errors={[form.visibleErrors.priority]} />
               ) : null}
             </Field>
+
+            <Field data-invalid={Boolean(form.visibleErrors.parentIssueRef)}>
+              <Label htmlFor={`${formKey}-parent-issue`}>
+                Parent GitHub issue
+              </Label>
+              <Input
+                aria-invalid={Boolean(form.visibleErrors.parentIssueRef)}
+                id={`${formKey}-parent-issue`}
+                maxLength={500}
+                onBlur={() => {
+                  form.touchField("parentIssueRef")
+                }}
+                onChange={(event) => {
+                  form.setFieldValue(
+                    "parentIssueRef",
+                    event.currentTarget.value
+                  )
+                }}
+                placeholder="https://github.com/owner/repo/issues/123 or #123"
+                value={form.draft.parentIssueRef ?? ""}
+              />
+              <p className="text-muted-foreground text-xs">
+                Link this report as a sub-issue of an existing GitHub issue.
+                Leave blank to create a standalone issue.
+              </p>
+              {form.visibleErrors.parentIssueRef ? (
+                <FieldError errors={[form.visibleErrors.parentIssueRef]} />
+              ) : null}
+            </Field>
+
             <div className="grid grid-cols-2 gap-2">
               <Button
                 className="w-full"

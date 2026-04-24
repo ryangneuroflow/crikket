@@ -23,12 +23,26 @@ const priorityValues = Object.values(PRIORITY_OPTIONS) as [
   ...Priority[],
 ]
 
+// Client-side sanity check that matches parseParentIssueRef on the server.
+// Empty is fine — the field is optional. The server also validates and will
+// fall back to a top-level issue on any parsing/repo-mismatch error, but
+// catching obvious typos here keeps the reporter in the form flow.
+const PARENT_ISSUE_PATTERN =
+  /^(https?:\/\/(?:www\.)?github\.com\/[^/\s]+\/[^/\s]+\/issues\/\d+(?:[/?#].*)?|#?\d+)$/i
+
 const formSchema = z.object({
   title: z.string().max(200, "Title must be at most 200 characters."),
   description: z
     .string()
     .max(3000, "Description must be at most 3000 characters."),
   priority: z.enum(priorityValues),
+  parentIssueRef: z
+    .string()
+    .max(500, "Parent issue reference is too long.")
+    .refine(
+      (value) => value.trim() === "" || PARENT_ISSUE_PATTERN.test(value.trim()),
+      "Enter a GitHub issue URL, #<number>, or <number>."
+    ),
 })
 
 interface DebuggerSummary {
@@ -50,6 +64,7 @@ interface FormStepProps {
     title: string
     description: string
     priority: Priority
+    parentIssueRef: string
   }) => void
   onCancel: () => void
 }
@@ -58,6 +73,7 @@ interface FormValues {
   title: string
   description: string
   priority: Priority
+  parentIssueRef: string
 }
 
 export function FormStep({
@@ -76,6 +92,7 @@ export function FormStep({
     title: initialTitle,
     description: "",
     priority: PRIORITY_OPTIONS.none,
+    parentIssueRef: "",
   }
 
   const form = useForm({
@@ -88,6 +105,7 @@ export function FormStep({
         title: value.title,
         description: value.description,
         priority: value.priority,
+        parentIssueRef: value.parentIssueRef,
       })
     },
   })
@@ -288,6 +306,33 @@ export function FormStep({
                     rows={4}
                     value={field.state.value}
                   />
+                  {isInvalid && <FieldError errors={field.state.meta.errors} />}
+                </Field>
+              )
+            }}
+          </form.Field>
+
+          <form.Field name="parentIssueRef">
+            {(field) => {
+              const isInvalid =
+                field.state.meta.isTouched && field.state.meta.errors.length > 0
+              return (
+                <Field data-invalid={isInvalid}>
+                  <FieldLabel htmlFor={field.name}>
+                    Parent GitHub issue (Optional)
+                  </FieldLabel>
+                  <Input
+                    aria-invalid={isInvalid}
+                    id={field.name}
+                    onBlur={field.handleBlur}
+                    onChange={(event) => field.handleChange(event.target.value)}
+                    placeholder="https://github.com/owner/repo/issues/123 or #123"
+                    value={field.state.value}
+                  />
+                  <p className="text-muted-foreground text-xs">
+                    Link this report as a sub-issue of an existing GitHub issue.
+                    Leave blank to create a standalone issue.
+                  </p>
                   {isInvalid && <FieldError errors={field.state.meta.errors} />}
                 </Field>
               )

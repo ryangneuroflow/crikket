@@ -33,9 +33,16 @@ type Report = {
     url: string
     status: number | null
     duration: number | null
+    responseBody: string | null
     timestamp: Date
   }>
-  actions: Array<{ type: string; target: string | null; timestamp: Date }>
+  actions: Array<{
+    type: string
+    target: string | null
+    offset: number | null
+    metadata: unknown
+    timestamp: Date
+  }>
 }
 
 const state: {
@@ -48,7 +55,8 @@ const state: {
   branchCreateStatus: number
   existingFileSha: string | undefined
   issueStatus: number
-  issueResponse: { number?: number; html_url?: string }
+  issueResponse: { number?: number; html_url?: string; id?: number }
+  subIssueStatus: number
   nonFatalErrors: Array<{ message: string; error: unknown }>
 } = {
   report: null,
@@ -62,7 +70,9 @@ const state: {
   issueResponse: {
     number: 42,
     html_url: "https://github.com/test/repo/issues/42",
+    id: 10_042,
   },
+  subIssueStatus: 201,
   nonFatalErrors: [],
 }
 
@@ -191,6 +201,10 @@ globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
   if (method === "PUT" && u.includes("/contents/")) {
     return jsonResponse(200, {})
   }
+  // Sub-issue attach: /repos/<repo>/issues/<parent>/sub_issues
+  if (method === "POST" && u.endsWith("/sub_issues")) {
+    return jsonResponse(state.subIssueStatus, {})
+  }
   // Create issue
   if (method === "POST" && u.includes("/issues")) {
     return jsonResponse(state.issueStatus, state.issueResponse)
@@ -206,9 +220,15 @@ afterAll(() => {
 // ----- Module under test ----------------------------------------------------
 
 let forwardBugReportToGitHub: typeof import("../src/lib/integrations").forwardBugReportToGitHub
+let createGitHubIssue: typeof import("../src/lib/integrations").createGitHubIssue
+let attachAndUpdateGitHubIssue: typeof import("../src/lib/integrations").attachAndUpdateGitHubIssue
 
 beforeAll(async () => {
-  ;({ forwardBugReportToGitHub } = await import("../src/lib/integrations"))
+  ;({
+    forwardBugReportToGitHub,
+    createGitHubIssue,
+    attachAndUpdateGitHubIssue,
+  } = await import("../src/lib/integrations"))
 })
 
 // ----- Helpers --------------------------------------------------------------
@@ -259,6 +279,7 @@ function makeReport(overrides: Partial<Report> = {}): Report {
         url: "https://api.example.com/v1/settings",
         status: 500,
         duration: 423,
+        responseBody: '{"detail":"Internal server error"}',
         timestamp: new Date("2026-04-22T16:00:03Z"),
       },
     ],
@@ -266,12 +287,27 @@ function makeReport(overrides: Partial<Report> = {}): Report {
       {
         type: "click",
         target: "button#save",
+        offset: 1500,
+        metadata: null,
         timestamp: new Date("2026-04-22T16:00:00Z"),
       },
       {
         type: "input",
         target: "input#email",
+        offset: 2100,
+        metadata: null,
         timestamp: new Date("2026-04-22T16:00:00.500Z"),
+      },
+      {
+        type: "navigation",
+        target: "window",
+        offset: 2500,
+        metadata: {
+          mode: "pushState",
+          url: "http://localhost:5173/auth/register",
+          path: "/auth/register",
+        },
+        timestamp: new Date("2026-04-22T16:00:01Z"),
       },
     ],
     ...overrides,
@@ -290,7 +326,9 @@ function resetState(): void {
   state.issueResponse = {
     number: 42,
     html_url: "https://github.com/test/repo/issues/42",
+    id: 10_042,
   }
+  state.subIssueStatus = 201
   state.nonFatalErrors = []
   fetchCalls.length = 0
 }
@@ -299,6 +337,25 @@ function lastIssuePost(): RecordedCall | undefined {
   return [...fetchCalls]
     .reverse()
     .find((c) => c.method === "POST" && c.url.endsWith("/issues"))
+}
+
+const ISSUE_PATCH_URL_RE = /\/issues\/\d+$/
+const ISSUE_42_PATCH_URL_RE = /\/issues\/42$/
+
+// After the create/attach split, attachments + size notices land in a PATCH
+// to /issues/<n> (the followup that embeds artifact links), not in the
+// initial POST /issues body. Tests asserting on attachment markdown should
+// inspect this call instead of lastIssuePost.
+function lastIssuePatch(): RecordedCall | undefined {
+  return [...fetchCalls]
+    .reverse()
+    .find((c) => c.method === "PATCH" && ISSUE_PATCH_URL_RE.test(c.url))
+}
+
+function lastSubIssuePost(): RecordedCall | undefined {
+  return [...fetchCalls]
+    .reverse()
+    .find((c) => c.method === "POST" && c.url.endsWith("/sub_issues"))
 }
 
 beforeEach(() => {
@@ -394,7 +451,10 @@ describe("forwardBugReportToGitHub: issue body rendering", () => {
   it("renders artifact links using github.com/<repo>/blob URLs and no inline embed", async () => {
     await forwardBugReportToGitHub(state.report!.id)
 
-    const bodyText = (lastIssuePost()!.body as { body: string }).body
+    // Attachment links land in the PATCH that updates the body after uploads,
+    // not in the initial create POST (which goes out before attachments are
+    // touched so the issue URL can be returned to the SDK quickly).
+    const bodyText = (lastIssuePatch()!.body as { body: string }).body
 
     // Uses blob URL, not raw.githubusercontent.com
     expect(bodyText).toContain(
@@ -407,6 +467,11 @@ describe("forwardBugReportToGitHub: issue body rendering", () => {
 
     // No inline screenshot embed (Camo would refuse private-repo content).
     expect(bodyText).not.toContain("![Screenshot]")
+
+    // The original POST should NOT contain the artifact links — they only
+    // appear after the upload phase finishes and PATCHes the body.
+    const initialBody = (lastIssuePost()!.body as { body: string }).body
+    expect(initialBody).not.toContain("/blob/crikket-attachments/")
   })
 
   it("renders reproduction steps, console logs, and a network table", async () => {
@@ -421,7 +486,66 @@ describe("forwardBugReportToGitHub: issue body rendering", () => {
     expect(bodyText).toContain("ERROR: Uncaught TypeError")
 
     expect(bodyText).toContain("<summary>Network requests</summary>")
-    expect(bodyText).toContain("| POST | 500 | 423ms |")
+    // Network table now has a Response column and shows the 500 payload.
+    expect(bodyText).toContain(
+      "| POST | 500 | 423ms | https://api.example.com/v1/settings |"
+    )
+  })
+
+  it("renders navigation actions with path + mode from metadata", async () => {
+    await forwardBugReportToGitHub(state.report!.id)
+    const bodyText = (lastIssuePost()!.body as { body: string }).body
+
+    // `window` is the stored target; the renderer should prefer the path +
+    // pushState from metadata so the step actually says what happened.
+    expect(bodyText).toContain(
+      "3. **navigation** — `/auth/register` _(pushState)_"
+    )
+    expect(bodyText).not.toContain("3. **navigation** — `window`")
+  })
+
+  it("annotates each reproduction step with its offset from recording start", async () => {
+    await forwardBugReportToGitHub(state.report!.id)
+    const bodyText = (lastIssuePost()!.body as { body: string }).body
+
+    // 1500ms → +1.5s, 2100ms → +2.1s, 2500ms → +2.5s.
+    expect(bodyText).toContain("1. **click** — `button#save` _(+1.5s)_")
+    expect(bodyText).toContain("_(+2.1s)_")
+    expect(bodyText).toContain("_(+2.5s)_")
+  })
+
+  it("surfaces the response body in the network table only for error responses", async () => {
+    state.report = makeReport({
+      networkRequests: [
+        {
+          method: "GET",
+          url: "https://api.example.com/v1/ok",
+          status: 200,
+          duration: 10,
+          responseBody: '{"data":{"secret":"should not appear"}}',
+          timestamp: new Date(),
+        },
+        {
+          method: "GET",
+          url: "https://api.example.com/v1/fail",
+          status: 500,
+          duration: 280,
+          responseBody: '{"detail":"Internal server error"}',
+          timestamp: new Date(),
+        },
+      ],
+    })
+
+    await forwardBugReportToGitHub(state.report.id)
+    const bodyText = (lastIssuePost()!.body as { body: string }).body
+
+    expect(bodyText).toContain(
+      "| Method | Status | Duration | URL | Response |"
+    )
+    // 200 rows render `—` (no noise).
+    expect(bodyText).not.toContain("should not appear")
+    // 5xx rows include the body snippet.
+    expect(bodyText).toContain('`{"detail":"Internal server error"}`')
   })
 
   it("omits the priority label when priority is 'none'", async () => {
@@ -533,7 +657,10 @@ describe("forwardBugReportToGitHub: attachment branch + upload flow", () => {
     )
     expect(capturePuts.length).toBe(0)
 
-    const bodyText = (lastIssuePost()!.body as { body: string }).body
+    // The "not uploaded" notice is part of the attachments section, which
+    // only gets rendered into the PATCH body — the initial create POST goes
+    // out before attachments are processed.
+    const bodyText = (lastIssuePatch()!.body as { body: string }).body
     expect(bodyText).toContain("not uploaded")
     expect(bodyText).toContain("MB exceeds")
     expect(bodyText).toContain("Retrieve from crikket")
@@ -546,12 +673,189 @@ describe("forwardBugReportToGitHub: issue creation failure", () => {
     state.credentials = { repo: "owner/repo", token: "ghp_x" }
     state.branchExists = true
     state.issueStatus = 500
-    state.issueResponse = { number: undefined, html_url: undefined }
+    state.issueResponse = {
+      number: undefined,
+      html_url: undefined,
+      id: undefined,
+    }
 
     await forwardBugReportToGitHub(state.report!.id)
 
     expect(
       state.nonFatalErrors.some((e) => ISSUE_CREATE_FAILED_RE.test(e.message))
     ).toBeTrue()
+  })
+})
+
+// The two-phase split exists so upload-session can await issue creation
+// (fast) and surface the URL synchronously, while the slow attachment
+// uploads + body PATCH stay fire-and-forget. These tests pin that contract.
+describe("createGitHubIssue / attachAndUpdateGitHubIssue split", () => {
+  beforeEach(() => {
+    state.report = makeReport()
+    state.credentials = { repo: "owner/repo", token: "ghp_x" }
+  })
+
+  it("createGitHubIssue returns the issue URL + number without uploading attachments", async () => {
+    const created = await createGitHubIssue(state.report!.id)
+
+    expect(created).not.toBeNull()
+    expect(created!.htmlUrl).toBe("https://github.com/test/repo/issues/42")
+    expect(created!.number).toBe(42)
+
+    // No attachment uploads should have happened — the contract is "fast,
+    // single POST". Branch ensure + Contents API PUTs belong to the second
+    // phase.
+    const attachmentWrites = fetchCalls.filter(
+      (c) => c.method === "PUT" && c.url.includes("/contents/")
+    )
+    expect(attachmentWrites.length).toBe(0)
+
+    // Initial body has no attachment markdown.
+    const initialBody = (lastIssuePost()!.body as { body: string }).body
+    expect(initialBody).not.toContain("/blob/crikket-attachments/")
+    expect(initialBody).not.toContain("## Artifacts")
+  })
+
+  it("createGitHubIssue returns null when the org has no GitHub integration", async () => {
+    state.credentials = null
+
+    const created = await createGitHubIssue(state.report!.id)
+
+    expect(created).toBeNull()
+    // No POST /issues either — we bail before hitting the API.
+    expect(lastIssuePost()).toBeUndefined()
+  })
+
+  it("attachAndUpdateGitHubIssue uploads attachments and PATCHes the issue body", async () => {
+    state.branchExists = true
+
+    await attachAndUpdateGitHubIssue({
+      bugReportId: state.report!.id,
+      issueNumber: 42,
+      repo: "owner/repo",
+      token: "ghp_x",
+    })
+
+    const patchedBody = (lastIssuePatch()!.body as { body: string }).body
+    expect(patchedBody).toContain("## Artifacts")
+    expect(patchedBody).toContain("/blob/crikket-attachments/")
+    expect(lastIssuePatch()!.url).toMatch(ISSUE_42_PATCH_URL_RE)
+  })
+})
+
+const SUB_ISSUES_URL_RE = /\/issues\/\d+\/sub_issues$/
+const REPO_MISMATCH_RE = /does not match integration repo/
+const MALFORMED_PARENT_REF_RE = /malformed parent-issue ref/
+const SUBISSUE_ATTACH_FAILED_RE = /Failed to attach sub-issue/
+
+describe("createGitHubIssue: sub-issue linking", () => {
+  beforeEach(() => {
+    state.report = makeReport({ captureKey: null, debuggerKey: null })
+    state.credentials = { repo: "owner/repo", token: "ghp_x" }
+  })
+
+  it("does not call /sub_issues when no parent ref is supplied", async () => {
+    const created = await createGitHubIssue(state.report!.id)
+
+    expect(created).not.toBeNull()
+    expect(created!.parentIssueNumber).toBeNull()
+    expect(lastSubIssuePost()).toBeUndefined()
+  })
+
+  it("attaches the new issue as a sub-issue when a bare number is supplied", async () => {
+    const created = await createGitHubIssue(state.report!.id, {
+      parentIssueRef: "17",
+    })
+
+    expect(created).not.toBeNull()
+    expect(created!.parentIssueNumber).toBe(17)
+
+    const sub = lastSubIssuePost()
+    expect(sub).toBeDefined()
+    expect(sub!.url).toMatch(SUB_ISSUES_URL_RE)
+    expect(sub!.url).toContain("/repos/owner/repo/issues/17/sub_issues")
+    // POST body carries the *child* issue's database id (10042), not its
+    // human-facing number (42). GitHub's sub-issues endpoint requires the id.
+    expect(sub!.body).toEqual({ sub_issue_id: 10_042 })
+  })
+
+  it("accepts the `#123` form", async () => {
+    const created = await createGitHubIssue(state.report!.id, {
+      parentIssueRef: "#99",
+    })
+
+    expect(created!.parentIssueNumber).toBe(99)
+    expect(lastSubIssuePost()!.url).toContain(
+      "/repos/owner/repo/issues/99/sub_issues"
+    )
+  })
+
+  it("accepts a full issue URL when the owner/repo matches the integration", async () => {
+    const created = await createGitHubIssue(state.report!.id, {
+      parentIssueRef: "https://github.com/owner/repo/issues/101",
+    })
+
+    expect(created!.parentIssueNumber).toBe(101)
+    expect(lastSubIssuePost()!.url).toContain(
+      "/repos/owner/repo/issues/101/sub_issues"
+    )
+  })
+
+  it("skips the sub-issue attach when the URL points at a different repo", async () => {
+    const created = await createGitHubIssue(state.report!.id, {
+      parentIssueRef: "https://github.com/other/elsewhere/issues/1",
+    })
+
+    // The top-level issue is still created — capture must not be lost.
+    expect(created).not.toBeNull()
+    expect(created!.parentIssueNumber).toBeNull()
+    expect(lastSubIssuePost()).toBeUndefined()
+    expect(
+      state.nonFatalErrors.some((e) => REPO_MISMATCH_RE.test(e.message))
+    ).toBeTrue()
+  })
+
+  it("skips the sub-issue attach when the ref is malformed", async () => {
+    const created = await createGitHubIssue(state.report!.id, {
+      parentIssueRef: "not a valid reference",
+    })
+
+    expect(created).not.toBeNull()
+    expect(created!.parentIssueNumber).toBeNull()
+    expect(lastSubIssuePost()).toBeUndefined()
+    expect(
+      state.nonFatalErrors.some((e) => MALFORMED_PARENT_REF_RE.test(e.message))
+    ).toBeTrue()
+  })
+
+  it("still returns the created issue when the sub-issue POST fails", async () => {
+    state.subIssueStatus = 422
+
+    const created = await createGitHubIssue(state.report!.id, {
+      parentIssueRef: "17",
+    })
+
+    // Top-level issue exists, but the parent link wasn't established.
+    expect(created).not.toBeNull()
+    expect(created!.htmlUrl).toBe("https://github.com/test/repo/issues/42")
+    expect(created!.parentIssueNumber).toBeNull()
+    expect(
+      state.nonFatalErrors.some((e) =>
+        SUBISSUE_ATTACH_FAILED_RE.test(e.message)
+      )
+    ).toBeTrue()
+  })
+
+  it("ignores an empty-string parent ref (treats as not supplied)", async () => {
+    const created = await createGitHubIssue(state.report!.id, {
+      parentIssueRef: "   ",
+    })
+
+    expect(created!.parentIssueNumber).toBeNull()
+    expect(lastSubIssuePost()).toBeUndefined()
+    // No error reported — empty input is the default for reporters who don't
+    // want a parent link.
+    expect(state.nonFatalErrors.length).toBe(0)
   })
 })

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test"
 
+import { VIDEO_LOOKBACK_MS } from "../src/constants"
 import {
   getCaptureSdk,
   sdkTestState,
@@ -18,6 +19,12 @@ describe("capture SDK recording flow", () => {
       host: "https://api.crikket.io",
     })
 
+    // The collector is installed eagerly at init — not lazily on first capture —
+    // so the ring buffer has been filling since SDK bootstrap. That's why the
+    // video session below gets a non-zero lookback: there's something to look
+    // back at.
+    expect(sdkTestState.installCalls).toBe(1)
+
     const startResult = await capture.startRecording()
     expect(startResult).toEqual({
       startedAt: 1_700_000_000_000,
@@ -25,7 +32,7 @@ describe("capture SDK recording flow", () => {
     expect(sdkTestState.startSessionCalls).toEqual([
       {
         captureType: "video",
-        lookbackMs: undefined,
+        lookbackMs: VIDEO_LOOKBACK_MS,
       },
     ])
     expect(sdkTestState.markRecordingStartedCalls).toEqual([1_700_000_000_000])

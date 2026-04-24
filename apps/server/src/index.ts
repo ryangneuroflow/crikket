@@ -5,6 +5,7 @@ import {
 } from "@crikket/api/rate-limit"
 import { appRouter } from "@crikket/api/routers/index"
 import { auth } from "@crikket/auth"
+import { runEphemeralBootstrap } from "@crikket/bug-reports/lib/ephemeral-bootstrap"
 import { runBugReportIngestionPass } from "@crikket/bug-reports/lib/ingestion-jobs"
 import { runStalePendingBugReportCleanupPass } from "@crikket/bug-reports/lib/orphan-cleanup"
 import { runArtifactCleanupPass } from "@crikket/bug-reports/lib/storage"
@@ -20,6 +21,14 @@ import { logger } from "hono/logger"
 import { handleCaptureFinalize } from "./capture/finalize-route"
 import { handleCaptureToken } from "./capture/token-route"
 import { handleCaptureUploadSession } from "./capture/upload-session-route"
+
+// Fire-and-forget: no-op when the GITHUB_BOOTSTRAP_* / CAPTURE_BOOTSTRAP_* env
+// vars are unset, so local dev is unaffected. Migrations have already
+// completed before this container starts (compose depends_on condition:
+// service_completed_successfully on migrate).
+runEphemeralBootstrap().catch((error: unknown) => {
+  console.error("[bootstrap] ephemeral bootstrap failed", error)
+})
 
 const app = new Hono()
 const allowedCorsOrigins = env.CORS_ORIGINS

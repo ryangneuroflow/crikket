@@ -11,7 +11,12 @@ import {
   hasDebuggerPayloadData,
 } from "@crikket/capture-core/debugger/payload"
 import type { DebuggerEvent } from "@crikket/capture-core/debugger/types"
-import { MAX_RECENT_EVENT_AGE_MS, MAX_RECENT_EVENT_COUNT } from "../constants"
+import {
+  MAX_RECENT_EVENT_AGE_MS,
+  MAX_RECENT_EVENT_COUNT,
+  SCREENSHOT_LOOKBACK_MS,
+  VIDEO_LOOKBACK_MS,
+} from "../constants"
 import type { CaptureType, DebuggerSession, ReviewSnapshot } from "../types"
 import { createSessionId, isBridgePayload } from "../utils"
 
@@ -73,6 +78,14 @@ export class DebuggerCollector {
 
     window.removeEventListener("message", this.handleWindowMessage)
     this.installed = false
+  }
+
+  startScreenshotSession(): DebuggerSession {
+    return this.startSession("screenshot", SCREENSHOT_LOOKBACK_MS)
+  }
+
+  startRecordingSession(): DebuggerSession {
+    return this.startSession("video", VIDEO_LOOKBACK_MS)
   }
 
   startSession(captureType: CaptureType, lookbackMs = 0): DebuggerSession {

@@ -44,6 +44,16 @@ export const bugReport = pgTable(
     debuggerIngestedAt: timestamp("debugger_ingested_at"),
     submissionStatus: text("submission_status").default("ready").notNull(),
     visibility: text("visibility").default("private").notNull(), // public | private
+    // Populated by the GitHub integration when an issue is created for this
+    // report. Null if (a) the org has no GitHub integration configured, or
+    // (b) the integration call failed — both are non-fatal for capture.
+    githubIssueUrl: text("github_issue_url"),
+    // Parent GitHub issue number when the reporter requested the new issue
+    // be linked as a sub-issue. Stored as the resolved issue number (not the
+    // raw user input) so retries and dashboards can reason about it directly.
+    // Null when (a) no parent was specified, or (b) the sub-issue attach
+    // failed — the child issue still exists either way.
+    githubParentIssueNumber: integer("github_parent_issue_number"),
     metadata: jsonb("metadata"),
     deviceInfo: jsonb("device_info"), // browser, os, viewport, etc.
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -82,6 +92,10 @@ export const bugReportUploadSession = pgTable(
     captureKey: text("capture_key").notNull(),
     captureContentType: text("capture_content_type").notNull(),
     debuggerKey: text("debugger_key"),
+    // Optional parent-issue reference the reporter supplied in the form. Raw
+    // text as entered — URL, `#123`, or bare number. Parsed at finalize time
+    // by the GitHub integration so we can surface errors in one place.
+    parentIssueRef: text("parent_issue_ref"),
     metadata: jsonb("metadata"),
     deviceInfo: jsonb("device_info"),
     expiresAt: timestamp("expires_at").notNull(),

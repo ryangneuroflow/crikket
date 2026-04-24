@@ -1,4 +1,4 @@
-import { LazyDebuggerCollector } from "../debugger/lazy-debugger-collector"
+import { DebuggerCollector } from "../debugger/debugger-collector"
 import {
   captureScreenshot,
   startDisplayRecording,
@@ -27,10 +27,26 @@ export class CaptureSdkRuntime implements CaptureRuntimeController {
   private submitTransport: CaptureSubmitTransport | undefined
   private mountedTarget: HTMLElement | null = null
   private mountedUi: MountedCaptureUi | null = null
-  private readonly debuggerCollector = new LazyDebuggerCollector()
+  // The collector is normally passed in by the outer LazyCaptureSdkRuntime,
+  // which installs it at SDK bootstrap so the event ring buffer fills from
+  // page load forward. When no collector is supplied (direct instantiation,
+  // some tests) we construct and install our own and dispose it on unmount.
+  private readonly debuggerCollector: DebuggerCollector
+  private readonly ownsDebuggerCollector: boolean
   private activeRecording: RecordingController | null = null
   private currentMedia: CapturedMedia | null = null
   private currentReview: ReviewSnapshot | null = null
+
+  constructor(debuggerCollector?: DebuggerCollector) {
+    if (debuggerCollector) {
+      this.debuggerCollector = debuggerCollector
+      this.ownsDebuggerCollector = false
+    } else {
+      this.debuggerCollector = new DebuggerCollector()
+      this.debuggerCollector.install()
+      this.ownsDebuggerCollector = true
+    }
+  }
 
   init(options: CaptureInitOptions): CaptureRuntimeController {
     const config: CaptureRuntimeConfig = {
@@ -101,7 +117,9 @@ export class CaptureSdkRuntime implements CaptureRuntimeController {
     this.setUiHidden(false)
     this.mountedUi?.unmount()
     this.mountedUi = null
-    this.debuggerCollector.dispose()
+    if (this.ownsDebuggerCollector) {
+      this.debuggerCollector.dispose()
+    }
     this.mountedTarget = null
   }
 
@@ -130,7 +148,7 @@ export class CaptureSdkRuntime implements CaptureRuntimeController {
     this.getRuntimeConfig()
     this.ensureBrowserContext()
     this.abortActiveRecording()
-    await this.debuggerCollector.startRecordingSession()
+    this.debuggerCollector.startRecordingSession()
 
     try {
       await this.hideUiForCapture()
@@ -183,7 +201,7 @@ export class CaptureSdkRuntime implements CaptureRuntimeController {
   async takeScreenshot(): Promise<Blob | null> {
     this.getRuntimeConfig()
     this.ensureBrowserContext()
-    await this.debuggerCollector.startScreenshotSession()
+    this.debuggerCollector.startScreenshotSession()
 
     let blob: Blob
     try {
@@ -232,7 +250,10 @@ export class CaptureSdkRuntime implements CaptureRuntimeController {
     })
 
     if (this.mountedUi) {
-      this.mountedUi.store.showSuccess(result.shareUrl)
+      this.mountedUi.store.showSuccess({
+        shareUrl: result.shareUrl,
+        githubIssueUrl: result.githubIssueUrl,
+      })
     }
 
     return result

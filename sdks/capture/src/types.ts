@@ -103,6 +103,13 @@ export interface CaptureSubmissionDraft {
   description: string
   priority: CapturePriority
   visibility?: CaptureReportVisibility
+  /**
+   * Optional reference to an existing GitHub issue. When set, the newly
+   * created issue is linked as a sub-issue of the referenced parent.
+   * Accepted forms: issue URL, `#<number>`, or bare `<number>`. The server
+   * validates and falls back to a top-level issue on any parse error.
+   */
+  parentIssueRef?: string
 }
 
 export interface CaptureSubmitRequest {
@@ -124,12 +131,17 @@ export interface CaptureSubmitRequest {
     debuggerPayload?: BugReportDebuggerPayload
     debuggerSummary: CaptureDebuggerSummary
     media: Blob
+    parentIssueRef?: string
   }
 }
 
 export interface CaptureSubmitResult {
   shareUrl?: string
   reportId?: string
+  // Set when the host server forwarded the report to a configured GitHub
+  // integration and the issue was created successfully. Surfaces in the SDK
+  // success modal.
+  githubIssueUrl?: string
   raw?: unknown
 }
 
