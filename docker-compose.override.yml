@@ -32,6 +32,7 @@ services:
     # ~4GB memory pressure of `next build` under Bun (which OOMs on a stock
     # Docker Desktop) and enables hot-reload for frontend iteration.
     image: oven/bun:1.3.5-alpine
+    env_file: !reset []
     pull_policy: missing
     platform: ""
     entrypoint: []
