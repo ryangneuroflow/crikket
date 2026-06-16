@@ -428,10 +428,17 @@ describe("forwardBugReportToGitHub: issue body rendering", () => {
 
     const post = lastIssuePost()
     expect(post).toBeDefined()
-    const body = post!.body as { title: string; labels: string[]; body: string }
+    const body = post!.body as {
+      title: string
+      labels: string[]
+      body: string
+      type: string
+    }
 
     expect(body.title).toBe("[crikket] Button does not submit")
     expect(body.labels).toEqual(["crikket", "priority:high"])
+    // Forwarded captures are bug reports — stamp the GitHub "Bug" issue type.
+    expect(body.type).toBe("Bug")
     expect(body.body).toContain("## Description")
     expect(body.body).toContain("Clicking Save does nothing")
   })

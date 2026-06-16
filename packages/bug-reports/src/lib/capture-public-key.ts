@@ -141,6 +141,31 @@ export function isCapturePublicKeyActive(
   return record.status === CAPTURE_KEY_STATUS.active
 }
 
+/**
+ * Match a concrete request origin against a single allowed-origin entry.
+ *
+ * Entries are exact origins ("http://app.example.com") unless they contain a
+ * "*", which acts as a single-DNS-label wildcard in the host — mirroring TLS
+ * wildcard-cert semantics. So "http://*.localhost:5173" matches
+ * "http://research-lab.localhost:5173" but NOT the bare apex
+ * "http://localhost:5173" (list that separately) nor a multi-label host
+ * "http://a.b.localhost:5173". Both sides are already lowercased by
+ * normalizeCaptureOrigin, so the comparison is case-stable.
+ */
+export function captureOriginMatches(origin: string, allowed: string): boolean {
+  if (!allowed.includes("*")) {
+    return origin === allowed
+  }
+  // Escape every regex metacharacter in the trusted (admin-configured) pattern,
+  // then re-expand the escaped "*" into a single-label matcher: [^.:/]+ refuses
+  // to cross a dot, the port colon, or a path separator, so the wildcard can
+  // only stand in for one subdomain label.
+  const pattern = allowed
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\\\*/g, "[^.:/]+")
+  return new RegExp(`^${pattern}$`).test(origin)
+}
+
 export function isCaptureOriginAllowed(input: {
   origin: string
   record: Pick<CapturePublicKeyRecord, "allowedOrigins" | "status">
@@ -150,7 +175,9 @@ export function isCaptureOriginAllowed(input: {
     return false
   }
 
-  return input.record.allowedOrigins.includes(normalizedOrigin)
+  return input.record.allowedOrigins.some((allowed) =>
+    captureOriginMatches(normalizedOrigin, allowed)
+  )
 }
 
 async function findActiveCapturePublicKeyForOrigin(input: {

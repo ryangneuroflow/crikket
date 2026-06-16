@@ -11,6 +11,12 @@ const MAX_NETWORK_ROWS = 50
 const MAX_ACTION_ROWS = 50
 const MAX_MESSAGE_LEN = 400
 const GITHUB_API_VERSION = "2022-11-28"
+// Every capture forwarded to GitHub is a bug report, so stamp the issue with
+// the org's "Bug" issue type (GitHub's org-level Issue Types feature). GitHub
+// matches on the type's display name and "silently drops it" when the token
+// lacks push access or the org has no such type, so sending it never fails
+// issue creation in repos/orgs that aren't configured for issue types.
+const GITHUB_ISSUE_TYPE = "Bug"
 const REPO_PATTERN = /^[^/\s]+\/[^/\s]+$/
 const ATTACHMENTS_BRANCH = "crikket-attachments"
 // GitHub's Contents API hard-caps at 100MB per file; 40MB leaves headroom for
@@ -171,7 +177,7 @@ export async function createGitHubIssue(
         token,
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, body, labels }),
+        body: JSON.stringify({ title, body, labels, type: GITHUB_ISSUE_TYPE }),
       }
     )
 
