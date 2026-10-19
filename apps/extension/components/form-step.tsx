@@ -28,7 +28,7 @@ const priorityValues = Object.values(PRIORITY_OPTIONS) as [
 // fall back to a top-level issue on any parsing/repo-mismatch error, but
 // catching obvious typos here keeps the reporter in the form flow.
 const PARENT_ISSUE_PATTERN =
-  /^(https?:\/\/(?:www\.)?github\.com\/[^/\s]+\/[^/\s]+\/issues\/\d+(?:[/?#].*)?|#?\d+)$/i
+  /^(https?:\/\/(?:www\.)?github\.com\/[^/\s]+\/[^/\s]+\/issues\/\d+(?:[/?#].*)?|#?\d+|[a-z][a-z0-9_]*-\d+|https?:\/\/[^/\s]+(?:\/[^\s?#]*)?\/browse\/[a-z][a-z0-9_]*-\d+(?:[/?#].*)?)$/i
 
 const formSchema = z.object({
   title: z.string().max(200, "Title must be at most 200 characters."),
@@ -41,7 +41,7 @@ const formSchema = z.object({
     .max(500, "Parent issue reference is too long.")
     .refine(
       (value) => value.trim() === "" || PARENT_ISSUE_PATTERN.test(value.trim()),
-      "Enter a GitHub issue URL, #<number>, or <number>."
+      "Enter a GitHub issue URL or #<number>, or a Jira key like ABC-123."
     ),
 })
 
@@ -91,7 +91,7 @@ export function FormStep({
   const defaultValues: FormValues = {
     title: initialTitle,
     description: "",
-    priority: PRIORITY_OPTIONS.none,
+    priority: PRIORITY_OPTIONS.low,
     parentIssueRef: "",
   }
 
@@ -319,18 +319,18 @@ export function FormStep({
               return (
                 <Field data-invalid={isInvalid}>
                   <FieldLabel htmlFor={field.name}>
-                    Parent GitHub issue (Optional)
+                    Parent issue (Optional)
                   </FieldLabel>
                   <Input
                     aria-invalid={isInvalid}
                     id={field.name}
                     onBlur={field.handleBlur}
                     onChange={(event) => field.handleChange(event.target.value)}
-                    placeholder="https://github.com/owner/repo/issues/123 or #123"
+                    placeholder="#123, ABC-123, or an issue URL"
                     value={field.state.value}
                   />
                   <p className="text-muted-foreground text-xs">
-                    Link this report as a sub-issue of an existing GitHub issue.
+                    Link this report under an existing GitHub or Jira issue.
                     Leave blank to create a standalone issue.
                   </p>
                   {isInvalid && <FieldError errors={field.state.meta.errors} />}

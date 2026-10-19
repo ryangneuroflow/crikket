@@ -1,5 +1,9 @@
-import { useMemo, useState } from "react"
-import type { CaptureSubmissionDraft } from "../../../types"
+import { useEffect, useMemo, useState } from "react"
+import type {
+  CaptureIntegrations,
+  CaptureSubmissionDraft,
+} from "../../../types"
+import { defaultForwardTarget } from "../../store/capture-ui-store"
 import type { ReviewDraftErrors } from "../utils/review-form-schema"
 import {
   trimReviewDraftForSubmission,
@@ -15,10 +19,13 @@ const INITIAL_TOUCHED_STATE: ReviewDraftTouched = {
   title: false,
   visibility: false,
   parentIssueRef: false,
+  jiraFields: false,
+  forwardTarget: false,
 }
 
 export function useReviewForm(input: {
   initialDraft: CaptureSubmissionDraft
+  integrations: CaptureIntegrations | null
   onSubmit: (draft: CaptureSubmissionDraft) => Promise<void> | void
 }): {
   draft: CaptureSubmissionDraft
@@ -32,10 +39,43 @@ export function useReviewForm(input: {
 } {
   const [draft, setDraft] = useState(input.initialDraft)
   const [touched, setTouched] = useState(INITIAL_TOUCHED_STATE)
+  const { integrations } = input
+  const jiraFields = integrations?.jira.fields ?? []
+
+  // Integrations arrive asynchronously after the form mounts. Pick the
+  // default tracker if the reporter hasn't chosen one, and seed the admin
+  // defaults for any Jira field they haven't touched, without clobbering
+  // values they already picked.
+  useEffect(() => {
+    if (!integrations) {
+      return
+    }
+    setDraft((currentDraft) => {
+      let changed = false
+      const next = { ...currentDraft }
+      if (currentDraft.forwardTarget === undefined) {
+        const target = defaultForwardTarget(integrations)
+        if (target !== undefined) {
+          next.forwardTarget = target
+          changed = true
+        }
+      }
+      const current = currentDraft.jiraFields ?? {}
+      const seeded = { ...current }
+      for (const field of integrations.jira.fields) {
+        if (field.defaultValue !== undefined && !(field.id in current)) {
+          seeded[field.id] = field.defaultValue
+          changed = true
+        }
+      }
+      next.jiraFields = seeded
+      return changed ? next : currentDraft
+    })
+  }, [integrations])
 
   const errors = useMemo(() => {
-    return validateReviewDraft(draft) ?? {}
-  }, [draft])
+    return validateReviewDraft(draft, { jiraFields }) ?? {}
+  }, [draft, jiraFields])
 
   const visibleErrors = useMemo(() => {
     const nextVisibleErrors: ReviewDraftErrors = {}
@@ -82,9 +122,11 @@ export function useReviewForm(input: {
       title: true,
       visibility: true,
       parentIssueRef: true,
+      jiraFields: true,
+      forwardTarget: true,
     })
 
-    const submitErrors = validateReviewDraft(draft)
+    const submitErrors = validateReviewDraft(draft, { jiraFields })
     if (submitErrors) {
       return
     }

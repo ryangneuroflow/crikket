@@ -30,6 +30,11 @@ import {
   queueBugReportIngestionJob,
 } from "./ingestion-jobs"
 import { attachAndUpdateGitHubIssue, createGitHubIssue } from "./integrations"
+import {
+  getJiraReporterFields,
+  sanitizeReporterJiraFields,
+} from "./jira-fields"
+import { attachAndUpdateJiraIssue, createJiraIssue } from "./jira-integration"
 import { getStorageProvider } from "./storage"
 import {
   buildFallbackTitle,
@@ -62,7 +67,7 @@ const debuggerSummarySchema = z.object({
 export const createBugReportUploadSessionInputSchema = z.object({
   title: optionalText(200),
   description: optionalText(3000),
-  priority: z.enum(priorityValues).default(PRIORITY_OPTIONS.none),
+  priority: z.enum(priorityValues).default(PRIORITY_OPTIONS.low),
   tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
   url: z.string().url().optional(),
   attachmentType: z.enum(["video", "screenshot"]),
@@ -83,6 +88,12 @@ export const createBugReportUploadSessionInputSchema = z.object({
   // time so a single code path (the GitHub integration) owns all the
   // format/repo-mismatch errors.
   parentIssueRef: z.string().trim().max(MAX_PARENT_ISSUE_REF_LENGTH).optional(),
+  // Values for the Jira fields the widget fetched from /api/embed/jira-fields,
+  // keyed by Jira field id. Validated against the same metadata on receipt;
+  // anything unknown is dropped rather than failing the capture.
+  jiraFields: z.record(z.string().max(80), z.unknown()).optional(),
+  // Which configured tracker to forward to. Omitted = all of them.
+  forwardTarget: z.enum(["github", "jira"]).optional(),
 })
 
 export const finalizeBugReportUploadInputSchema = z.object({
@@ -169,6 +180,10 @@ export async function createBugReportUploadSession(input: {
 
   const storage = getStorageProvider()
   const normalizedMetadata = normalizeUploadMetadata(input.input.metadata)
+  const jiraFields = await resolveReporterJiraFields({
+    organizationId: input.organizationId,
+    submitted: input.input.jiraFields,
+  })
   const inferredTitle =
     input.input.title ??
     input.input.metadata?.pageTitle?.trim() ??
@@ -205,6 +220,8 @@ export async function createBugReportUploadSession(input: {
       }),
       debuggerKey,
       parentIssueRef: input.input.parentIssueRef || null,
+      jiraFields,
+      forwardTarget: input.input.forwardTarget ?? null,
       visibility: input.input.visibility,
       deviceInfo: input.input.deviceInfo,
       metadata: {
@@ -266,6 +283,8 @@ export async function finalizeBugReportUpload(input: {
   // synchronous Issues POST succeeded. Null otherwise — capture submit
   // succeeds either way.
   githubIssueUrl: string | null
+  // Same contract for the Jira integration. Both can be configured at once.
+  jiraIssueUrl: string | null
 }> {
   const uploadSession = await db.query.bugReportUploadSession.findFirst({
     where: and(
@@ -284,6 +303,7 @@ export async function finalizeBugReportUpload(input: {
         id: true,
         submissionStatus: true,
         githubIssueUrl: true,
+        jiraIssueUrl: true,
       },
     })
 
@@ -306,6 +326,7 @@ export async function finalizeBugReportUpload(input: {
         // previously-persisted GitHub URL so a retried submit shows the same
         // link the original submit did.
         githubIssueUrl: existingReport.githubIssueUrl,
+        jiraIssueUrl: existingReport.jiraIssueUrl,
       }
     }
 
@@ -417,8 +438,14 @@ export async function finalizeBugReportUpload(input: {
     })
   }
 
-  const githubIssueUrl = await forwardToGithubAndPersist(uploadSession.id, {
+  // The two integrations are independent: each no-ops fast when its org
+  // config is absent, so running them concurrently costs nothing when only
+  // one is set up and halves the wait when both are.
+  const { githubIssueUrl, jiraIssueUrl } = await forwardToTrackers({
+    bugReportId: uploadSession.id,
+    forwardTarget: uploadSession.forwardTarget,
     parentIssueRef: uploadSession.parentIssueRef,
+    jiraFields: reporterJiraFieldsOf(uploadSession.jiraFields),
   })
 
   return {
@@ -427,6 +454,7 @@ export async function finalizeBugReportUpload(input: {
     warnings,
     debugger: debuggerPersistence,
     githubIssueUrl,
+    jiraIssueUrl,
   }
 }
 
@@ -470,6 +498,94 @@ async function forwardToGithubAndPersist(
   })
 
   return created.htmlUrl
+}
+
+/**
+ * Forward to the tracker the reporter picked, or to every configured one
+ * when the client didn't say (older SDKs, the extension). Each helper
+ * no-ops fast when its integration is absent, so the unselected path costs
+ * nothing.
+ */
+async function forwardToTrackers(input: {
+  bugReportId: string
+  forwardTarget: string | null
+  parentIssueRef: string | null
+  jiraFields: Record<string, unknown> | undefined
+}): Promise<{ githubIssueUrl: string | null; jiraIssueUrl: string | null }> {
+  const wants = (target: "github" | "jira") =>
+    input.forwardTarget == null || input.forwardTarget === target
+  const [githubIssueUrl, jiraIssueUrl] = await Promise.all([
+    wants("github")
+      ? forwardToGithubAndPersist(input.bugReportId, {
+          parentIssueRef: input.parentIssueRef,
+        })
+      : null,
+    wants("jira")
+      ? forwardToJiraAndPersist(input.bugReportId, {
+          parentIssueRef: input.parentIssueRef,
+          jiraFields: input.jiraFields,
+        })
+      : null,
+  ])
+  return { githubIssueUrl, jiraIssueUrl }
+}
+
+// Only round-trip to Jira's create metadata when the reporter actually sent
+// field values; orgs without a Jira integration (or with nothing to pick)
+// never pay for it.
+async function resolveReporterJiraFields(input: {
+  organizationId: string
+  submitted: Record<string, unknown> | undefined
+}): Promise<Record<string, unknown> | null> {
+  if (!input.submitted || Object.keys(input.submitted).length === 0) {
+    return null
+  }
+  const fields = await getJiraReporterFields(input.organizationId)
+  const sanitized = sanitizeReporterJiraFields(fields, input.submitted)
+  return Object.keys(sanitized).length > 0 ? sanitized : null
+}
+
+function reporterJiraFieldsOf(
+  value: unknown
+): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined
+}
+
+/**
+ * Jira counterpart of forwardToGithubAndPersist: awaited issue POST so the
+ * browse URL reaches the success modal, then fire-and-forget attachment
+ * upload + description rewrite.
+ */
+async function forwardToJiraAndPersist(
+  bugReportId: string,
+  options?: {
+    parentIssueRef?: string | null
+    jiraFields?: Record<string, unknown>
+  }
+): Promise<string | null> {
+  const created = await createJiraIssue(bugReportId, options)
+  if (!created) return null
+
+  await db
+    .update(bugReport)
+    .set({
+      jiraIssueUrl: created.browseUrl,
+      jiraIssueKey: created.key,
+      updatedAt: new Date(),
+    })
+    .where(eq(bugReport.id, bugReportId))
+
+  attachAndUpdateJiraIssue({
+    bugReportId,
+    issueKey: created.key,
+    credentials: created.credentials,
+  }).catch(() => {
+    // intentional: errors are already reported inside the helper
+  })
+
+  return created.browseUrl
 }
 
 async function finalizeBugReportDebuggerIngestion(input: {

@@ -36,6 +36,11 @@ export function submitCapturedReport(input: {
       debuggerSummary: input.review.debuggerSummary,
       media: input.media.blob,
       parentIssueRef: trimmedParentRef === "" ? undefined : trimmedParentRef,
+      jiraFields:
+        input.draft.jiraFields && Object.keys(input.draft.jiraFields).length > 0
+          ? input.draft.jiraFields
+          : undefined,
+      forwardTarget: input.draft.forwardTarget,
     },
   })
 }

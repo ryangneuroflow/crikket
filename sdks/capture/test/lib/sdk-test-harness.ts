@@ -135,6 +135,7 @@ mock.module(MOUNT_CAPTURE_UI_PATH, () => ({
         showSuccess: (input: {
           shareUrl?: string
           githubIssueUrl?: string
+          jiraIssueUrl?: string
         }) => {
           sdkTestState.uiShowSuccessUrls.push(input.shareUrl)
         },
@@ -142,6 +143,7 @@ mock.module(MOUNT_CAPTURE_UI_PATH, () => ({
         setTitleIfEmpty: (value: string) => {
           sdkTestState.titlePrefills.push(value)
         },
+        setIntegrations: () => undefined,
         destroy: () => undefined,
       },
       unmount: () => {

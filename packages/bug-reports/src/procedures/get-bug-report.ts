@@ -71,6 +71,7 @@ export const getBugReportById = o
       // Surfaced on the bug-report detail page so admins can jump from the
       // capture to the GitHub issue created for it.
       githubIssueUrl: report.githubIssueUrl,
+      jiraIssueUrl: report.jiraIssueUrl,
       attachmentUrl,
       attachmentType: report.attachmentType,
       submissionStatus: report.submissionStatus,

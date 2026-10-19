@@ -98,16 +98,52 @@ export interface CaptureDebuggerSummary {
   networkRequests: number
 }
 
+/**
+ * A Jira field the host server wants the reporter to fill in, as served by
+ * `/api/embed/jira-fields`. Only present when the org forwards to Jira and
+ * the target project requires fields Crikket can't fill on its own.
+ */
+export interface JiraReporterField {
+  id: string
+  name: string
+  required: boolean
+  type: "select" | "multiselect" | "text" | "number"
+  options?: Array<{ id: string; label: string }>
+  /** Admin-configured default, already in submit shape (`{ id }` for options). */
+  defaultValue?: unknown
+}
+
+export type CaptureForwardTarget = "github" | "jira"
+
+/** Which trackers the host org forwards to, as served by `/api/embed/integrations`. */
+export interface CaptureIntegrations {
+  github: { configured: boolean }
+  jira: { configured: boolean; fields: JiraReporterField[] }
+}
+
 export interface CaptureSubmissionDraft {
   title: string
   description: string
   priority: CapturePriority
   visibility?: CaptureReportVisibility
   /**
-   * Optional reference to an existing GitHub issue. When set, the newly
-   * created issue is linked as a sub-issue of the referenced parent.
-   * Accepted forms: issue URL, `#<number>`, or bare `<number>`. The server
-   * validates and falls back to a top-level issue on any parse error.
+   * Tracker to forward this report to. Defaults to Jira when configured,
+   * else GitHub. Omitted when the org has neither, in which case the server
+   * forwards to whatever it has (nothing).
+   */
+  forwardTarget?: CaptureForwardTarget
+  /**
+   * Values for the JiraReporterFields, keyed by Jira field id. Option
+   * fields carry `{ id }` (or an array of them); text/number carry the
+   * primitive. The server re-validates against Jira's create metadata.
+   */
+  jiraFields?: Record<string, unknown>
+  /**
+   * Optional reference to an existing issue in the host's tracker. GitHub
+   * forms (issue URL, `#<number>`, `<number>`) link the new issue as a
+   * sub-issue; Jira forms (`ABC-123` or a `/browse/ABC-123` URL) set the
+   * parent or fall back to an issue link. The server validates and falls
+   * back to a top-level issue on any parse error.
    */
   parentIssueRef?: string
 }
@@ -132,6 +168,8 @@ export interface CaptureSubmitRequest {
     debuggerSummary: CaptureDebuggerSummary
     media: Blob
     parentIssueRef?: string
+    jiraFields?: Record<string, unknown>
+    forwardTarget?: CaptureForwardTarget
   }
 }
 
@@ -142,6 +180,8 @@ export interface CaptureSubmitResult {
   // integration and the issue was created successfully. Surfaces in the SDK
   // success modal.
   githubIssueUrl?: string
+  // Same contract for a configured Jira integration.
+  jiraIssueUrl?: string
   raw?: unknown
 }
 

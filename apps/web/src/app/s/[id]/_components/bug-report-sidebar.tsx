@@ -120,6 +120,21 @@ export function BugReportSidebar({
                     </a>
                   </div>
                 ) : null}
+                {data.jiraIssueUrl ? (
+                  <div className="grid gap-1">
+                    <span className="font-medium text-muted-foreground text-xs">
+                      Jira Issue
+                    </span>
+                    <a
+                      className="break-all text-sm underline underline-offset-2 hover:no-underline"
+                      href={data.jiraIssueUrl}
+                      rel="noopener noreferrer"
+                      target="_blank"
+                    >
+                      {data.jiraIssueUrl}
+                    </a>
+                  </div>
+                ) : null}
               </div>
             </div>
             <Separator />
