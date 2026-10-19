@@ -102,6 +102,7 @@ export async function defaultSubmitTransport(
     // GitHub URL is server-absolute (api.github.com is the source) — no host
     // prepending. May be missing entirely when the org has no integration.
     githubIssueUrl: resolveString(responsePayload, ["githubIssueUrl"]),
+    jiraIssueUrl: resolveString(responsePayload, ["jiraIssueUrl"]),
     raw: responsePayload,
   }
 }
@@ -119,6 +120,8 @@ function buildUploadSessionRequest(request: CaptureSubmitRequest): {
     submittedVia: string
   }
   parentIssueRef?: string
+  jiraFields?: Record<string, unknown>
+  forwardTarget?: CaptureSubmitRequest["report"]["forwardTarget"]
   priority: CaptureSubmitRequest["report"]["priority"]
   title: string
   url: string
@@ -145,6 +148,8 @@ function buildUploadSessionRequest(request: CaptureSubmitRequest): {
     debuggerSummary: request.report.debuggerSummary,
     hasDebuggerPayload: Boolean(request.report.debuggerPayload),
     parentIssueRef: request.report.parentIssueRef,
+    jiraFields: request.report.jiraFields,
+    forwardTarget: request.report.forwardTarget,
   }
 }
 

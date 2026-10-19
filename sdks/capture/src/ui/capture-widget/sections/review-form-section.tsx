@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from "react"
-import type { CaptureSubmissionDraft } from "../../../types"
+import type {
+  CaptureForwardTarget,
+  CaptureSubmissionDraft,
+  JiraReporterField,
+} from "../../../types"
 import type { CaptureReviewSubmitOptions, CaptureUiState } from "../../types"
 import { MediaPreview } from "../components/media-preview"
 import { Button } from "../components/primitives/button"
@@ -15,6 +19,24 @@ import {
   createAnnotatedScreenshotBlob,
   type ScreenshotAnnotation,
 } from "../utils/screenshot-annotations"
+import { JiraFieldsSection } from "./jira-fields-section"
+
+const SELECT_CLASS_NAME =
+  "h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none transition-[border-color,box-shadow] focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/60"
+
+// Jira is listed first so it's the default selection when both exist.
+function buildTrackerOptions(
+  state: CaptureUiState
+): Array<{ label: string; value: CaptureForwardTarget }> {
+  const options: Array<{ label: string; value: CaptureForwardTarget }> = []
+  if (state.integrations?.jira.configured) {
+    options.push({ label: "Jira", value: "jira" })
+  }
+  if (state.integrations?.github.configured) {
+    options.push({ label: "GitHub", value: "github" })
+  }
+  return options
+}
 
 interface ReviewFormSectionProps {
   formKey: string
@@ -46,8 +68,11 @@ export function ReviewFormSection({
     setAnnotations([])
   }, [state.media?.objectUrl])
 
+  const trackerOptions = buildTrackerOptions(state)
+  const jiraFields = state.integrations?.jira.fields ?? []
   const form = useReviewForm({
     initialDraft: state.reviewDraft,
+    integrations: state.integrations,
     onSubmit: async (draft) => {
       let submitOptions: CaptureReviewSubmitOptions | undefined
 
@@ -166,7 +191,7 @@ export function ReviewFormSection({
               <Label htmlFor={`${formKey}-priority`}>Priority</Label>
               <select
                 aria-invalid={Boolean(form.visibleErrors.priority)}
-                className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none transition-[border-color,box-shadow] focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/60"
+                className={SELECT_CLASS_NAME}
                 id={`${formKey}-priority`}
                 onBlur={() => {
                   form.touchField("priority")
@@ -191,34 +216,12 @@ export function ReviewFormSection({
               ) : null}
             </Field>
 
-            <Field data-invalid={Boolean(form.visibleErrors.parentIssueRef)}>
-              <Label htmlFor={`${formKey}-parent-issue`}>
-                Parent GitHub issue
-              </Label>
-              <Input
-                aria-invalid={Boolean(form.visibleErrors.parentIssueRef)}
-                id={`${formKey}-parent-issue`}
-                maxLength={500}
-                onBlur={() => {
-                  form.touchField("parentIssueRef")
-                }}
-                onChange={(event) => {
-                  form.setFieldValue(
-                    "parentIssueRef",
-                    event.currentTarget.value
-                  )
-                }}
-                placeholder="https://github.com/owner/repo/issues/123 or #123"
-                value={form.draft.parentIssueRef ?? ""}
-              />
-              <p className="text-muted-foreground text-xs">
-                Link this report as a sub-issue of an existing GitHub issue.
-                Leave blank to create a standalone issue.
-              </p>
-              {form.visibleErrors.parentIssueRef ? (
-                <FieldError errors={[form.visibleErrors.parentIssueRef]} />
-              ) : null}
-            </Field>
+            <TrackerFields
+              form={form}
+              formKey={formKey}
+              jiraFields={jiraFields}
+              trackerOptions={trackerOptions}
+            />
 
             <div className="grid grid-cols-2 gap-2">
               <Button
@@ -242,5 +245,101 @@ export function ReviewFormSection({
         </div>
       </div>
     </section>
+  )
+}
+
+/**
+ * "Submit to" chooser plus the fields that only make sense for the chosen
+ * tracker: the parent-issue reference (format differs per tracker) and the
+ * Jira section. Hidden entirely when the org forwards nowhere.
+ */
+function TrackerFields(props: {
+  form: ReturnType<typeof useReviewForm>
+  formKey: string
+  jiraFields: JiraReporterField[]
+  trackerOptions: Array<{ label: string; value: CaptureForwardTarget }>
+}): React.JSX.Element {
+  const { form, formKey, jiraFields, trackerOptions } = props
+  return (
+    <>
+      {trackerOptions.length > 0 ? (
+        <Field data-invalid={Boolean(form.visibleErrors.forwardTarget)}>
+          <Label htmlFor={`${formKey}-forward-target`}>Submit to</Label>
+          <select
+            className={SELECT_CLASS_NAME}
+            id={`${formKey}-forward-target`}
+            onBlur={() => {
+              form.touchField("forwardTarget")
+            }}
+            onChange={(event) => {
+              form.setFieldValue(
+                "forwardTarget",
+                event.currentTarget.value as CaptureForwardTarget
+              )
+            }}
+            value={form.draft.forwardTarget ?? ""}
+          >
+            {trackerOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+      ) : null}
+
+      {form.draft.forwardTarget ? (
+        <Field data-invalid={Boolean(form.visibleErrors.parentIssueRef)}>
+          <Label htmlFor={`${formKey}-parent-issue`}>
+            {form.draft.forwardTarget === "jira"
+              ? "Parent Jira issue"
+              : "Parent GitHub issue"}
+          </Label>
+          <Input
+            aria-invalid={Boolean(form.visibleErrors.parentIssueRef)}
+            id={`${formKey}-parent-issue`}
+            maxLength={500}
+            onBlur={() => {
+              form.touchField("parentIssueRef")
+            }}
+            onChange={(event) => {
+              form.setFieldValue("parentIssueRef", event.currentTarget.value)
+            }}
+            placeholder={
+              form.draft.forwardTarget === "jira"
+                ? "ABC-123 or an issue URL"
+                : "#123 or an issue URL"
+            }
+            value={form.draft.parentIssueRef ?? ""}
+          />
+          <p className="text-muted-foreground text-xs">
+            {form.draft.forwardTarget === "jira"
+              ? "Link this report under an existing Jira issue. Leave blank to create a standalone issue."
+              : "Link this report as a sub-issue of an existing GitHub issue. Leave blank to create a standalone issue."}
+          </p>
+          {form.visibleErrors.parentIssueRef ? (
+            <FieldError errors={[form.visibleErrors.parentIssueRef]} />
+          ) : null}
+        </Field>
+      ) : null}
+
+      {form.draft.forwardTarget === "jira" && jiraFields.length > 0 ? (
+        <JiraFieldsSection
+          error={form.visibleErrors.jiraFields}
+          fields={jiraFields}
+          formKey={formKey}
+          onBlur={() => {
+            form.touchField("jiraFields")
+          }}
+          onChange={(fieldId, value) => {
+            form.setFieldValue("jiraFields", {
+              ...(form.draft.jiraFields ?? {}),
+              [fieldId]: value,
+            })
+          }}
+          values={form.draft.jiraFields ?? {}}
+        />
+      ) : null}
+    </>
   )
 }

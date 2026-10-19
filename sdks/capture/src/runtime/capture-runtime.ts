@@ -3,9 +3,11 @@ import {
   captureScreenshot,
   startDisplayRecording,
 } from "../media/lazy-capture-media"
+import { fetchCaptureIntegrations } from "../transport/integrations"
 import type {
   CapturedMedia,
   CaptureInitOptions,
+  CaptureIntegrations,
   CaptureRuntimeConfig,
   CaptureRuntimeController,
   CaptureSubmissionDraft,
@@ -36,6 +38,10 @@ export class CaptureSdkRuntime implements CaptureRuntimeController {
   private activeRecording: RecordingController | null = null
   private currentMedia: CapturedMedia | null = null
   private currentReview: ReviewSnapshot | null = null
+  // One createmeta round-trip per runtime, kicked off when the review form
+  // first opens so the fields are usually there before the reporter scrolls
+  // to them. Null until requested.
+  private integrationsPromise: Promise<CaptureIntegrations> | null = null
 
   constructor(debuggerCollector?: DebuggerCollector) {
     if (debuggerCollector) {
@@ -142,6 +148,7 @@ export class CaptureSdkRuntime implements CaptureRuntimeController {
     this.unmount()
     this.runtimeConfig = null
     this.submitTransport = undefined
+    this.integrationsPromise = null
   }
 
   async startRecording(): Promise<{ startedAt: number }> {
@@ -253,6 +260,7 @@ export class CaptureSdkRuntime implements CaptureRuntimeController {
       this.mountedUi.store.showSuccess({
         shareUrl: result.shareUrl,
         githubIssueUrl: result.githubIssueUrl,
+        jiraIssueUrl: result.jiraIssueUrl,
       })
     }
 
@@ -314,6 +322,27 @@ export class CaptureSdkRuntime implements CaptureRuntimeController {
       summary: review.debuggerSummary,
     })
     this.prefillTitle()
+    this.loadIntegrations()
+  }
+
+  private loadIntegrations(): void {
+    const config = this.runtimeConfig
+    if (!config) {
+      return
+    }
+    if (!this.integrationsPromise) {
+      // Best effort: a failure here only means the form omits the tracker
+      // section and the server forwards to whatever it has.
+      this.integrationsPromise = fetchCaptureIntegrations(config).catch(() => ({
+        github: { configured: false },
+        jira: { configured: false, fields: [] },
+      }))
+    }
+    this.integrationsPromise
+      .then((integrations) => {
+        this.mountedUi?.store.setIntegrations(integrations)
+      })
+      .catch(() => undefined)
   }
 
   private abortActiveRecording(): void {

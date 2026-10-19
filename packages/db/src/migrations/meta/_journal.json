@@ -29,6 +29,13 @@
       "when": 1777000000000,
       "tag": "0003_add_parent_issue_ref_and_github_parent_issue_number",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792432455065,
+      "tag": "0004_add_jira_integration",
+      "breakpoints": true
     }
   ]
 }

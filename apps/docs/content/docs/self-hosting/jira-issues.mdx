@@ -1,0 +1,216 @@
+---
+title: Jira Issue Forwarding
+description: Forward Crikket bug reports to a Jira project as issues, with capture and debugger artifacts attached.
+---
+
+Crikket can automatically forward every submitted bug report to a Jira
+project as an issue. The issue description includes the report's
+description, context table, reproduction steps, console logs, and network
+requests. The capture (screenshot or recording) and debugger payload are
+uploaded as Jira attachments and linked from the description.
+
+The integration is configured **per organization** from the web app and
+works with both Jira Cloud and Jira Data Center. It can be enabled
+alongside [GitHub Issue Forwarding](/docs/self-hosting/github-issues);
+each report is then forwarded to both.
+
+## Prerequisites
+
+- A Jira site you can create issues on.
+- An Atlassian account with **Create Issues** permission in the target
+  project (and **Link Issues** if you want parent linking to fall back
+  to an issue link).
+- An API token for that account. Create one at
+  [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens).
+
+Issues are created as the token's account, so a dedicated bot account
+keeps reporter attribution clean.
+
+## Configure
+
+1. Sign in as an organization admin.
+2. Open **Settings → Integrations → Jira**.
+3. Enter the site URL (e.g. `https://my-team.atlassian.net`).
+4. Enter the project key (the `ABC` in `ABC-123`).
+5. Optionally change the issue type (defaults to `Bug`; must match an
+   issue type name in the project) and the sub-task issue type used when
+   a reporter links a Story or Task as parent (blank = auto-detect).
+6. Enter the Atlassian account email and paste the API token.
+7. Optionally add **Additional fields** (see below) if the project
+   requires custom fields on create.
+8. Save.
+
+The token is encrypted at rest with AES-256-GCM using a key derived from
+`BETTER_AUTH_SECRET`; the plaintext is never stored or re-surfaced in the
+UI. To rotate the token, enter a new one and save again. To keep the
+existing token while changing other settings, leave the token field blank.
+
+### Additional fields
+
+Many projects make custom fields mandatory on the create screen (a
+"Component", an "Affected Area" select, and so on). Crikket can't know
+these, so the **Additional fields** setting takes a JSON object that is
+merged into the create-issue `fields` payload:
+
+```json
+{
+  "customfield_11289": { "id": "12682" },
+  "customfield_10173": { "value": "Error" },
+  "components": [{ "name": "Web" }]
+}
+```
+
+Crikket's own fields (`project`, `issuetype`, `summary`, `description`)
+always win on a clash. A `priority` in the JSON suppresses Crikket's
+priority mapping; `labels` are merged with Crikket's.
+
+### Choosing a tracker in the widget
+
+When an organization has both GitHub and Jira configured, the capture
+widget shows a **Submit to** dropdown. Jira is selected by default; the
+reporter can switch to GitHub. Only the chosen tracker receives the
+report, and the parent-issue field and (for Jira) the custom fields
+section change to match. With a single tracker configured the dropdown
+still appears with that one option. Clients that don't send a choice
+(older SDKs, the browser extension) are forwarded to every configured
+tracker, as before.
+
+### Reporter-chosen fields
+
+The capture widget asks the server which trackers are configured and for
+the Jira project's create metadata (`GET /api/embed/integrations`,
+authorized by the capture public key) and renders a **Jira** section with:
+
+- every field that is **required** on the create screen and that Crikket
+  doesn't fill itself (summary, description, project, issue type,
+  reporter, labels, priority, parent), and
+- every optional field the admin listed in **Additional fields** — so
+  pinning a default is also how you opt an optional field into the form.
+
+Single- and multi-selects, text, and number fields are rendered; other
+types (users, versions, components, cascading selects, dates) are not
+and must be covered by the admin defaults. Admin defaults pre-select the
+controls; whatever the reporter picks wins over them. The server
+re-validates submitted values against the same metadata and drops
+anything unknown. Create metadata is cached for ten minutes per
+organization.
+
+To find field ids and option ids, call the create metadata endpoint as
+the integration user:
+
+```
+GET /rest/api/2/issue/createmeta?projectKeys=KEY&issuetypeNames=Bug&expand=projects.issuetypes.fields
+```
+
+Each required field is listed with its `allowedValues` (`id` and
+`value`). Ids are more stable than display values.
+
+### Bootstrap from environment
+
+Ephemeral environments can skip the UI by setting these on the server
+alongside `CAPTURE_BOOTSTRAP_PUBLIC_KEY` and `CAPTURE_BOOTSTRAP_ORIGINS`:
+
+| Variable | Example |
+| --- | --- |
+| `JIRA_BOOTSTRAP_SITE_URL` | `https://my-team.atlassian.net` |
+| `JIRA_BOOTSTRAP_EMAIL` | `crikket-bot@example.com` |
+| `JIRA_BOOTSTRAP_API_TOKEN` | `ATATT3...` |
+| `JIRA_BOOTSTRAP_PROJECT_KEY` | `ABC` |
+| `JIRA_BOOTSTRAP_ISSUE_TYPE` | `Bug` (optional) |
+| `JIRA_BOOTSTRAP_SUBTASK_ISSUE_TYPE` | `Sub-task` (optional) |
+| `JIRA_BOOTSTRAP_EXTRA_FIELDS_JSON` | `{"customfield_11289":{"id":"12682"}}` (optional) |
+
+## What Happens When a Report Is Forwarded
+
+When a bug report is submitted, Crikket:
+
+1. Looks up the submitter's organization integration config. If no config
+   is present, the forward is skipped.
+2. Creates an issue via `POST /rest/api/2/issue` with summary
+   `[crikket] <report title>`, labels `crikket` and `priority-<level>`
+   (when priority is set), and the matching Jira priority
+   (`critical` → Highest, `high` → High, `medium` → Medium, `low` → Low).
+3. Returns the issue URL to the capture widget so it appears in the
+   success modal immediately.
+4. In the background, uploads the capture (`.png` or `.webm`) and the
+   debugger payload (`.debugger.json`) as attachments, then rewrites the
+   description to link them. Screenshots get an inline thumbnail.
+
+The description is Jira wiki markup (API v2), which renders on both
+Cloud and Data Center. It contains:
+
+- **Description** — the submitter's description text.
+- **Context** table — URL, browser, OS, viewport, priority, tags,
+  duration, SDK version.
+- **Artifacts** — attachment links.
+- **Reproduction steps** — action events from the session.
+- **Console logs** — up to 50 entries.
+- **Network requests** — up to 50 requests.
+
+A failure in forwarding never fails the report submission itself;
+failures are logged as non-fatal errors.
+
+### Fields Jira rejects
+
+Projects vary in which fields are on the create screen. If Jira rejects
+the create because `priority`, `labels`, or `parent` is not available,
+Crikket drops the offending field(s) and retries once. The server log
+records which fields were dropped.
+
+## Parent Issues
+
+The capture form's **Parent issue** field accepts a Jira key (`ABC-123`)
+or a `/browse/ABC-123` URL. Crikket looks up the parent's issue type and
+places the report accordingly:
+
+| Parent is | Result |
+| --- | --- |
+| Epic (or higher) | A `Bug` with `parent` set to the Epic |
+| Story, Task, Bug (standard level) | A **sub-task** under that parent, using the **Sub-task issue type** setting (blank = the project's first sub-task type) |
+| A sub-task | A top-level `Bug` with a **Relates** link to it |
+
+If the sub-task create fails (for example, the sub-task screen has
+required fields that aren't set), Crikket falls back to a top-level
+`Bug` and adds a **Relates** link to the parent, so the capture always
+lands somewhere. Fields Jira rejects as not being on the sub-task
+screen (custom fields included) are dropped and the create retried once.
+
+GitHub-form references (`#123`, a github.com issue URL) in the same field
+are handled by the GitHub integration and ignored by Jira.
+
+## Attachment Size Limit
+
+Individual artifacts are capped at **40 MB** before upload. Jira sites
+may enforce a lower limit; a rejected upload is reported in the
+description as "upload failed" with the report id so the artifact can
+be retrieved from the Crikket dashboard.
+
+## Removing the Integration
+
+Return to **Settings → Integrations → Jira** and click **Remove
+integration**. The stored config (site, project, email, encrypted token)
+is deleted immediately. Previously created issues and attachments are
+untouched.
+
+## Troubleshooting
+
+**Issue was never created.** Check the server logs for
+`[jira-integration]` entries. Common causes:
+
+- `401`: wrong email/token pair, or the token was revoked.
+- `403`: the account lacks Create Issues permission in the project.
+- `404`: the site URL is wrong, or the project key doesn't exist.
+- `400` naming `issuetype`: the issue type name doesn't exist in the
+  project. Check the project's issue types and update the setting.
+- `400` with `"<Field> is required."` messages: the project has
+  mandatory custom fields that the widget couldn't render (unsupported
+  type) and that have no admin default. Set them in **Additional
+  fields**.
+
+**Attachments missing from the issue.** Look for an `upload failed`
+line in the Artifacts section; the attachments endpoint rejects files
+over the site's attachment size limit with `413`.
+
+**Priority not set.** The project's create screen omits the priority
+field or uses a custom scheme without the default names. The
+`priority-<level>` label still carries the value.

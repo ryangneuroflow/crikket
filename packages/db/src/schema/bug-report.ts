@@ -54,6 +54,11 @@ export const bugReport = pgTable(
     // Null when (a) no parent was specified, or (b) the sub-issue attach
     // failed — the child issue still exists either way.
     githubParentIssueNumber: integer("github_parent_issue_number"),
+    // Populated by the Jira integration when an issue is created for this
+    // report. Same null semantics as githubIssueUrl — both integrations can
+    // be configured at once and each forwards independently.
+    jiraIssueUrl: text("jira_issue_url"),
+    jiraIssueKey: text("jira_issue_key"),
     metadata: jsonb("metadata"),
     deviceInfo: jsonb("device_info"), // browser, os, viewport, etc.
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -96,6 +101,14 @@ export const bugReportUploadSession = pgTable(
     // text as entered — URL, `#123`, or bare number. Parsed at finalize time
     // by the GitHub integration so we can surface errors in one place.
     parentIssueRef: text("parent_issue_ref"),
+    // Reporter-chosen values for the Jira fields surfaced in the capture
+    // widget, already sanitised against the project's create metadata.
+    // Merged into the Jira create payload at finalize time.
+    jiraFields: jsonb("jira_fields"),
+    // Tracker the reporter chose in the widget ("github" | "jira"). Null
+    // means the client didn't say, in which case every configured
+    // integration forwards — the behaviour older SDKs and the extension rely on.
+    forwardTarget: text("forward_target"),
     metadata: jsonb("metadata"),
     deviceInfo: jsonb("device_info"),
     expiresAt: timestamp("expires_at").notNull(),

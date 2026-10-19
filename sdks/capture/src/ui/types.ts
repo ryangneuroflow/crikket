@@ -1,6 +1,7 @@
 import type {
   CaptureDebuggerSummary,
   CapturedMedia,
+  CaptureIntegrations,
   CaptureSubmissionDraft,
 } from "../types"
 
@@ -23,6 +24,10 @@ export interface CaptureUiState {
   // is configured. Empty string when absent — keeps the field non-optional so
   // selectors don't need null-guards.
   githubIssueUrl: string
+  jiraIssueUrl: string
+  // Which trackers the org forwards to (and Jira's reporter fields),
+  // fetched once per runtime from the host server. Null until loaded.
+  integrations: CaptureIntegrations | null
   copyLabel: string
   reviewDraft: CaptureSubmissionDraft
   reviewFormKey: string
@@ -68,9 +73,14 @@ export interface CaptureUiStore {
     warnings: string[]
     summary: CaptureDebuggerSummary
   }) => void
-  showSuccess: (input: { shareUrl?: string; githubIssueUrl?: string }) => void
+  showSuccess: (input: {
+    shareUrl?: string
+    githubIssueUrl?: string
+    jiraIssueUrl?: string
+  }) => void
   showError: (message: string) => void
   setTitleIfEmpty: (value: string) => void
+  setIntegrations: (integrations: CaptureIntegrations) => void
   destroy: () => void
 }
 

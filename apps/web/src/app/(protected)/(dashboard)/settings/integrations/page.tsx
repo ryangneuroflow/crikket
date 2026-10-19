@@ -14,6 +14,7 @@ import { getProtectedAuthData } from "@/app/(protected)/_lib/get-protected-auth-
 import { client } from "@/utils/orpc"
 
 import { GithubIntegrationForm } from "../_components/github-integration-form"
+import { JiraIntegrationForm } from "../_components/jira-integration-form"
 import { getRequestErrorMessage } from "../_lib/get-request-error-message"
 
 export const metadata: Metadata = {
@@ -68,6 +69,22 @@ export default async function IntegrationsSettingsPage() {
         error: null as unknown,
       }
 
+  const emptyJiraSummary = {
+    configured: false as const,
+    siteUrl: null as string | null,
+    email: null as string | null,
+    projectKey: null as string | null,
+    issueType: null as string | null,
+    subtaskIssueType: null as string | null,
+    extraFieldsJson: null as string | null,
+  }
+  const jiraIntegrationState = canManage
+    ? await client.jiraIntegration
+        .get()
+        .then((data) => ({ data, error: null as unknown }))
+        .catch((error: unknown) => ({ data: emptyJiraSummary, error }))
+    : { data: emptyJiraSummary, error: null as unknown }
+
   return (
     <div className="space-y-4">
       <div>
@@ -79,23 +96,51 @@ export default async function IntegrationsSettingsPage() {
       </div>
 
       {canManage ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>GitHub Issues</CardTitle>
-            <CardDescription>
-              Create an issue in your repo whenever a bug report is submitted.
-              Screenshots, recordings, and debugger payloads are committed to a
-              dedicated <code>crikket-attachments</code> branch and linked from
-              the issue.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <GithubIntegrationForm
-              initialConfigured={githubIntegrationState.data.configured}
-              initialRepo={githubIntegrationState.data.repo}
-            />
-          </CardContent>
-        </Card>
+        <>
+          <Card>
+            <CardHeader>
+              <CardTitle>GitHub Issues</CardTitle>
+              <CardDescription>
+                Create an issue in your repo whenever a bug report is submitted.
+                Screenshots, recordings, and debugger payloads are committed to
+                a dedicated <code>crikket-attachments</code> branch and linked
+                from the issue.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <GithubIntegrationForm
+                initialConfigured={githubIntegrationState.data.configured}
+                initialRepo={githubIntegrationState.data.repo}
+              />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Jira</CardTitle>
+              <CardDescription>
+                Create an issue in a Jira project whenever a bug report is
+                submitted. Screenshots, recordings, and debugger payloads are
+                uploaded as issue attachments. Works alongside GitHub — both can
+                be enabled at once.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <JiraIntegrationForm
+                initialConfigured={jiraIntegrationState.data.configured}
+                initialEmail={jiraIntegrationState.data.email}
+                initialExtraFieldsJson={
+                  jiraIntegrationState.data.extraFieldsJson
+                }
+                initialIssueType={jiraIntegrationState.data.issueType}
+                initialProjectKey={jiraIntegrationState.data.projectKey}
+                initialSiteUrl={jiraIntegrationState.data.siteUrl}
+                initialSubtaskIssueType={
+                  jiraIntegrationState.data.subtaskIssueType
+                }
+              />
+            </CardContent>
+          </Card>
+        </>
       ) : (
         <Card>
           <CardHeader>
@@ -105,16 +150,22 @@ export default async function IntegrationsSettingsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="text-muted-foreground text-sm">
-            Ask an organization admin to configure the GitHub integration for
-            this workspace.
+            Ask an organization admin to configure the GitHub or Jira
+            integration for this workspace.
           </CardContent>
         </Card>
       )}
 
       {githubIntegrationState.error ? (
         <p className="text-destructive text-sm">
-          Failed to load integration:{" "}
+          Failed to load GitHub integration:{" "}
           {getRequestErrorMessage(githubIntegrationState.error)}
+        </p>
+      ) : null}
+      {jiraIntegrationState.error ? (
+        <p className="text-destructive text-sm">
+          Failed to load Jira integration:{" "}
+          {getRequestErrorMessage(jiraIntegrationState.error)}
         </p>
       ) : null}
     </div>

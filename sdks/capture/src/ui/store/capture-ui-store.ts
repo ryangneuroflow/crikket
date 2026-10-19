@@ -3,11 +3,13 @@ import { PRIORITY_OPTIONS } from "@crikket/shared/constants/priorities"
 import type {
   CaptureDebuggerSummary,
   CapturedMedia,
+  CaptureForwardTarget,
+  CaptureIntegrations,
   CapturePriority,
 } from "../../types"
 import type { CaptureUiState, CaptureUiStore } from "../types"
 
-const DEFAULT_PRIORITY: CapturePriority = PRIORITY_OPTIONS.none
+const DEFAULT_PRIORITY: CapturePriority = PRIORITY_OPTIONS.low
 const DEFAULT_SUMMARY: CaptureDebuggerSummary = {
   actions: 0,
   logs: 0,
@@ -49,6 +51,7 @@ export function createCaptureUiStore(): CaptureUiStore {
       summary: input.summary,
       shareUrl: "",
       githubIssueUrl: "",
+      jiraIssueUrl: "",
       copyLabel: "Copy Link",
       reviewDraft: {
         title: "",
@@ -56,6 +59,8 @@ export function createCaptureUiStore(): CaptureUiStore {
         priority: DEFAULT_PRIORITY,
         visibility: BUG_REPORT_VISIBILITY_OPTIONS.private,
         parentIssueRef: "",
+        jiraFields: {},
+        forwardTarget: defaultForwardTarget(state.integrations),
       },
       reviewFormKey: input.media.objectUrl,
     })
@@ -110,6 +115,7 @@ export function createCaptureUiStore(): CaptureUiStore {
         busy: false,
         shareUrl: input.shareUrl ?? "",
         githubIssueUrl: input.githubIssueUrl ?? "",
+        jiraIssueUrl: input.jiraIssueUrl ?? "",
         copyLabel: "Copy Link",
       })
     },
@@ -117,6 +123,9 @@ export function createCaptureUiStore(): CaptureUiStore {
       patchState({
         errorMessage: message,
       })
+    },
+    setIntegrations: (integrations) => {
+      patchState({ integrations })
     },
     setTitleIfEmpty: (value) => {
       if (state.reviewDraft.title.trim().length > 0) {
@@ -137,6 +146,17 @@ export function createCaptureUiStore(): CaptureUiStore {
   }
 }
 
+// Jira first when both are configured, per product decision; GitHub when
+// it's the only tracker; nothing when the org forwards nowhere.
+export function defaultForwardTarget(
+  integrations: CaptureIntegrations | null
+): CaptureForwardTarget | undefined {
+  if (!integrations) return undefined
+  if (integrations.jira.configured) return "jira"
+  if (integrations.github.configured) return "github"
+  return undefined
+}
+
 function createInitialState(): CaptureUiState {
   return {
     view: "chooser",
@@ -150,6 +170,8 @@ function createInitialState(): CaptureUiState {
     media: null,
     shareUrl: "",
     githubIssueUrl: "",
+    jiraIssueUrl: "",
+    integrations: null,
     copyLabel: "Copy Link",
     reviewDraft: {
       title: "",

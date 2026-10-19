@@ -4,6 +4,7 @@ import { bugReport } from "@crikket/db/schema/bug-report"
 import { reportNonFatalError } from "@crikket/shared/lib/errors"
 import { eq } from "drizzle-orm"
 import { getGithubIntegrationCredentials } from "./github-integration-config"
+import { isJiraParentIssueRef } from "./jira-integration"
 import { getStorageProvider } from "./storage"
 
 const MAX_LOG_LINES = 50
@@ -299,6 +300,9 @@ function resolveParentIssue(input: {
 }): ParsedParentIssueRef | null {
   const { raw, configuredRepo, bugReportId } = input
   if (!raw) return null
+  // The parent field is shared with the Jira integration; a `KEY-123` or
+  // /browse/ ref is that integration's to handle, not a malformed GitHub ref.
+  if (isJiraParentIssueRef(raw)) return null
 
   let parsed: ParsedParentIssueRef | null
   try {

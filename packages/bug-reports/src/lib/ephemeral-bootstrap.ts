@@ -4,23 +4,26 @@ import { capturePublicKey } from "@crikket/db/schema/bug-report"
 import { eq } from "drizzle-orm"
 import { normalizeCaptureOrigins } from "./capture-public-key"
 import { upsertGithubIntegration } from "./github-integration-config"
+import { upsertJiraIntegration } from "./jira-integration-config"
 
 // Consumed by ephemeral environments (e.g. .github/workflows/ephemeral-env.yml)
-// that must spin up Crikket and have issues flow to GitHub without any manual
-// UI configuration. No-op when the required env vars are absent, so local dev
-// through the UI continues to work.
+// that must spin up Crikket and have issues flow to GitHub and/or Jira without
+// any manual UI configuration. No-op when the required env vars are absent, so
+// local dev through the UI continues to work.
 //
 // Idempotent: on every boot it (a) ensures a deterministic org exists,
 // (b) refreshes the capture_public_key row's allowed origins (ephemeral tunnel
-// URLs change per run), and (c) upserts the GitHub integration row. Never
-// creates duplicate orgs or keys.
+// URLs change per run), and (c) upserts whichever integration rows have env
+// vars set. Never creates duplicate orgs or keys.
 export async function runEphemeralBootstrap(): Promise<void> {
   const repo = process.env.GITHUB_BOOTSTRAP_REPO?.trim()
   const token = process.env.GITHUB_BOOTSTRAP_TOKEN?.trim()
+  const jira = readJiraBootstrapEnv()
   const publicKeyValue = process.env.CAPTURE_BOOTSTRAP_PUBLIC_KEY?.trim()
   const originsRaw = process.env.CAPTURE_BOOTSTRAP_ORIGINS?.trim()
 
-  if (!(repo && token && publicKeyValue && originsRaw)) {
+  const github = repo && token ? { repo, token } : null
+  if (!((github || jira) && publicKeyValue && originsRaw)) {
     return
   }
 
@@ -89,10 +92,43 @@ export async function runEphemeralBootstrap(): Promise<void> {
     console.log(`[bootstrap] created capture public key for ${orgSlug}`)
   }
 
-  await upsertGithubIntegration({
-    organizationId,
-    repo,
-    token,
-  })
-  console.log(`[bootstrap] GitHub integration configured for ${repo}`)
+  if (github) {
+    await upsertGithubIntegration({ organizationId, ...github })
+    console.log(`[bootstrap] GitHub integration configured for ${github.repo}`)
+  }
+
+  if (jira) {
+    await upsertJiraIntegration({ organizationId, ...jira })
+    console.log(
+      `[bootstrap] Jira integration configured for ${jira.projectKey} on ${jira.siteUrl}`
+    )
+  }
+}
+
+function readJiraBootstrapEnv(): {
+  siteUrl: string
+  email: string
+  projectKey: string
+  issueType?: string
+  subtaskIssueType?: string
+  apiToken: string
+  extraFieldsJson?: string
+} | null {
+  const siteUrl = process.env.JIRA_BOOTSTRAP_SITE_URL?.trim()
+  const email = process.env.JIRA_BOOTSTRAP_EMAIL?.trim()
+  const projectKey = process.env.JIRA_BOOTSTRAP_PROJECT_KEY?.trim()
+  const apiToken = process.env.JIRA_BOOTSTRAP_API_TOKEN?.trim()
+  const issueType = process.env.JIRA_BOOTSTRAP_ISSUE_TYPE?.trim()
+  const extraFieldsJson = process.env.JIRA_BOOTSTRAP_EXTRA_FIELDS_JSON?.trim()
+  const subtaskIssueType = process.env.JIRA_BOOTSTRAP_SUBTASK_ISSUE_TYPE?.trim()
+  if (!(siteUrl && email && projectKey && apiToken)) return null
+  return {
+    siteUrl,
+    email,
+    projectKey,
+    apiToken,
+    issueType: issueType || undefined,
+    subtaskIssueType: subtaskIssueType || undefined,
+    extraFieldsJson: extraFieldsJson || undefined,
+  }
 }

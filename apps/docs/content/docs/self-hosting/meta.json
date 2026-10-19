@@ -8,6 +8,7 @@
     "storage",
     "operations",
     "github-issues",
+    "jira-issues",
     "troubleshooting"
   ]
 }

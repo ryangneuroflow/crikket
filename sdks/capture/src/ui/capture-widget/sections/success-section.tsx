@@ -61,6 +61,21 @@ export function SuccessSection(props: {
         </div>
       ) : null}
 
+      {props.state.jiraIssueUrl ? (
+        <div className="grid gap-2">
+          <Label>Jira Issue</Label>
+          <a
+            className="inline-flex items-center gap-1.5 text-sm underline underline-offset-2 hover:no-underline"
+            href={props.state.jiraIssueUrl}
+            rel="noopener noreferrer"
+            target="_blank"
+          >
+            <ExternalLinkIcon className="h-3.5 w-3.5" />
+            {props.state.jiraIssueUrl}
+          </a>
+        </div>
+      ) : null}
+
       <div className="grid gap-2 sm:grid-cols-2">
         <Button
           className="w-full gap-2"

@@ -26,6 +26,18 @@ function hasOnlyValidCaptureOrigins(value: string): boolean {
   })
 }
 
+function isBlankOrJsonObject(value: string): boolean {
+  if (value === "") return true
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return (
+      typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+    )
+  } catch {
+    return false
+  }
+}
+
 export const userNameFormSchema = z.object({
   name: z.string().min(1, "Name is required"),
 })
@@ -78,4 +90,27 @@ export const githubIntegrationFormSchema = z.object({
     }),
   // Token is only required the first time; on updates an empty string means "keep existing".
   token: z.string(),
+})
+
+export const jiraIntegrationFormSchema = z.object({
+  siteUrl: z.url({ message: "Enter the Jira site URL (https://...)" }),
+  email: z.email("Enter a valid email address"),
+  projectKey: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z][A-Za-z0-9_]*$/, {
+      message: "Use the project key, e.g. ABC",
+    }),
+  issueType: z.string().trim().max(80),
+  subtaskIssueType: z.string().trim().max(80),
+  // Token is only required the first time; on updates an empty string means "keep existing".
+  apiToken: z.string(),
+  extraFieldsJson: z
+    .string()
+    .trim()
+    .max(8000, "Additional fields JSON is too long")
+    .refine(isBlankOrJsonObject, {
+      message:
+        'Must be a JSON object, e.g. {"customfield_10001": {"id": "123"}}',
+    }),
 })
